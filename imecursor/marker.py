@@ -159,6 +159,7 @@ class Marker:
         self._prev_foreground = foreground_window()
         self._ensure_windows()
         self._apply_geometry()
+        self.clear()  # 隠れているあいだに何か残っていても空から始める
 
         # catcher を先に出し、shapes を後から出す。topmost 同士では後から
         # 表示した方が上に来るので、赤い枠が catcher の薄いベール越しにならない。
@@ -177,6 +178,8 @@ class Marker:
 
         self.active = True
         self._draw_indicator()
+        # 表示した直後のフレームから正しい内容を出す (描き直しを待たない)
+        self.canvas.update_idletasks()
         try:
             self._hotkeys.register(HOTKEY_ESCAPE, "escape")
         except ValueError:
@@ -195,6 +198,12 @@ class Marker:
         self.clear()
         if self.canvas is not None:
             self.canvas.delete(TAG_UI)
+            # 隠す前に、消した結果をここで描き切らせる。
+            # canvas.delete() は再描画を idle に予約するだけなので、その前に
+            # ウィンドウを隠すと Tk は unmapped なウィンドウを描かずに帰る。
+            # すると描画面には枠が載ったままの最後の画が残り、次に表示した
+            # ときにそれが一瞬見えてしまう
+            self.canvas.update_idletasks()
         for hwnd in (self._shapes_hwnd, self._catcher_hwnd):
             if hwnd:
                 hide_window(hwnd)
