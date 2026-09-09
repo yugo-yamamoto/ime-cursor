@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 import tkinter as tk
 import tkinter.font as tkfont
@@ -20,11 +21,15 @@ from .config import (
     COLOR_PRESETS,
     CURSOR_SIZE_MAX,
     CURSOR_SIZE_MIN,
+    MARKER_COLOR_PRESETS,
+    MARKER_WIDTH_MAX,
+    MARKER_WIDTH_MIN,
     PALETTE,
     Config,
     config_path,
     hex_to_rgb,
 )
+from .marker import Marker
 from .overlay import Overlay, pick_font_family
 from .win32 import cursor_pixel_size
 
@@ -42,6 +47,10 @@ LOG_MAX_LINES = 500
 
 DEFAULT_COLOR = "#00a0ff"
 
+# 管理画面の位置だけを表すジオメトリ。マルチモニタで原点が負のときは
+# Tk が "+-1920+0" の形を返すので、符号の重なりも許す
+_POSITION_ONLY = re.compile(r"[+-]-?\d+[+-]-?\d+")
+
 
 def _contrast_fg(color: str) -> str:
     """背景色に対して読める文字色 (白か黒) を返す。"""
@@ -52,10 +61,12 @@ def _contrast_fg(color: str) -> str:
 class AdminWindow:
     """常駐プロセスに 1 つだけ存在する管理画面。閉じても常駐は続く。"""
 
-    def __init__(self, root: tk.Tk, config: Config, overlay: Overlay, on_quit) -> None:
+    def __init__(self, root: tk.Tk, config: Config, overlay: Overlay,
+                 marker: Marker, on_quit) -> None:
         self.root = root
         self.config = config
         self.overlay = overlay
+        self.marker = marker
         self.on_quit = on_quit
         self._suppress = True  # 初期化中の trace で適用処理を走らせない
 
@@ -71,7 +82,9 @@ class AdminWindow:
         self.win.title("ime_cursor 管理画面")
         self.win.resizable(False, True)
         self.win.protocol("WM_DELETE_WINDOW", self.hide)
-        if config.admin_geometry:
+        # 覚えておくのは位置だけ。サイズまで復元すると、セクションが増えた
+        # あとの起動で中身がはみ出して切れてしまう
+        if _POSITION_ONLY.fullmatch(config.admin_geometry or ""):
             try:
                 self.win.geometry(config.admin_geometry)
             except tk.TclError:
@@ -96,6 +109,7 @@ class AdminWindow:
         outer.pack(fill="both", expand=True)
 
         self._build_badge_section(outer)
+        self._build_marker_section(outer)
         self._build_color_section(outer)
         self._build_size_section(outer)
         self._build_footer(outer)
@@ -147,6 +161,49 @@ class AdminWindow:
                     textvariable=self.var_alpha,
                     command=self._on_badge_option).pack(side="left", padx=(0, 2))
         ttk.Label(size_row, text="%").pack(side="left")
+
+    # -- プレゼン用マーカー ------------------------------------------------
+    def _build_marker_section(self, parent: ttk.Frame) -> None:
+        box = ttk.LabelFrame(parent, text=" プレゼン用マーカー（矩形） ", padding=10)
+        box.pack(fill="x", pady=(0, 8))
+
+        row = ttk.Frame(box)
+        row.pack(fill="x")
+        self.marker_button = ttk.Button(row, text="", width=22, command=self.toggle_marker)
+        self.marker_button.pack(side="left")
+        self.marker_status = tk.Label(row, text="", width=10, padx=8, pady=4, bd=1,
+                                      relief="solid")
+        self.marker_status.pack(side="left", padx=8)
+        self.marker_count = ttk.Label(row, text="", width=12)
+        self.marker_count.pack(side="left", padx=(4, 0))
+        ttk.Button(row, text="枠を消す", command=self.clear_marker).pack(side="left")
+
+        self.marker_hotkey_label = ttk.Label(box, text="")
+        self.marker_hotkey_label.pack(anchor="w", pady=(8, 0))
+
+        swatches = ttk.Frame(box)
+        swatches.pack(fill="x", pady=(8, 0))
+        for label, color in MARKER_COLOR_PRESETS:
+            tk.Button(
+                swatches, text=label, bg=color, fg=_contrast_fg(color),
+                activebackground=color, width=7, bd=1, relief="raised",
+                command=lambda c=color: self.set_marker_color(c),
+            ).pack(side="left", padx=(0, 4))
+        ttk.Button(swatches, text="色を選ぶ…",
+                   command=self.choose_marker_color).pack(side="left", padx=(4, 0))
+
+        opts = ttk.Frame(box)
+        opts.pack(fill="x", pady=(8, 0))
+        ttk.Label(opts, text="線の太さ").pack(side="left")
+        self.var_marker_width = tk.IntVar(value=self.config.marker_width)
+        ttk.Spinbox(opts, from_=MARKER_WIDTH_MIN, to=MARKER_WIDTH_MAX, width=5,
+                    textvariable=self.var_marker_width,
+                    command=self._on_marker_option).pack(side="left", padx=(6, 2))
+        ttk.Label(opts, text="px").pack(side="left")
+        ttk.Label(opts, text="いまの色:").pack(side="left", padx=(16, 4))
+        self.marker_preview = tk.Label(opts, text="", width=12, padx=8, pady=4, bd=2,
+                                       relief="groove")
+        self.marker_preview.pack(side="left")
 
     # -- マウスカーソルの色 ------------------------------------------------
     def _build_color_section(self, parent: ttk.Frame) -> None:
@@ -225,7 +282,7 @@ class AdminWindow:
 
         wrap = ttk.Frame(box)
         wrap.pack(fill="both", expand=True)
-        self.log_text = tk.Text(wrap, height=8, width=64, font=self.mono, wrap="word",
+        self.log_text = tk.Text(wrap, height=6, width=64, font=self.mono, wrap="word",
                                 state="disabled", bd=1, relief="solid")
         self.log_text.pack(side="left", fill="both", expand=True)
         bar = ttk.Scrollbar(wrap, orient="vertical", command=self.log_text.yview)
@@ -290,6 +347,43 @@ class AdminWindow:
             f"説明={self.config.verbose} 文字={self.config.font_size}px "
             f"不透明度={round(self.config.alpha * 100)}%"
         )
+
+    # -- マーカー ----------------------------------------------------------
+    def toggle_marker(self) -> None:
+        self.marker.toggle()
+        self._sync_widgets()
+
+    def clear_marker(self) -> None:
+        removed = self.marker.clear()
+        self.log(f"マーカーの枠 {removed} 個を消しました")
+        self._sync_widgets()
+
+    def set_marker_color(self, color: str) -> None:
+        self.config.marker_color = color
+        self.config.clamp()
+        self.marker.apply_config()
+        self._save()
+        self._sync_widgets()
+        self.log(f"マーカーの色を {self.config.marker_color} にしました")
+
+    def choose_marker_color(self) -> None:
+        _rgb, picked = colorchooser.askcolor(color=self.config.marker_color,
+                                             parent=self.win, title="マーカーの色")
+        if picked:
+            self.set_marker_color(picked.lower())
+
+    def _on_marker_option(self) -> None:
+        if self._suppress:
+            return
+        try:
+            self.config.marker_width = int(self.var_marker_width.get())
+        except (tk.TclError, ValueError):
+            return
+        self.config.clamp()
+        self.marker.apply_config()
+        self._save()
+        self._sync_widgets()
+        self.log(f"マーカーの線の太さを {self.config.marker_width}px にしました")
 
     # -- 色 ----------------------------------------------------------------
     def _on_color_mode(self) -> None:
@@ -358,7 +452,8 @@ class AdminWindow:
 
     def _save(self) -> None:
         try:
-            self.config.admin_geometry = self.win.geometry()
+            # サイズは捨てて位置だけ残す (中身に合わせた高さを毎回使う)
+            self.config.admin_geometry = re.sub(r"^\d+x\d+", "", self.win.geometry())
         except tk.TclError:
             pass
         try:
@@ -375,6 +470,27 @@ class AdminWindow:
             bg="#2e7d32" if on else "#9e9e9e",
             fg="#ffffff",
         )
+
+        marker_on = self.marker.active
+        self.marker_button.configure(
+            text="マーカーを停止" if marker_on else "マーカーを開始"
+        )
+        self.marker_status.configure(
+            text="描画中" if marker_on else "停止中",
+            bg="#c62828" if marker_on else "#9e9e9e",
+            fg="#ffffff",
+        )
+        self.marker_count.configure(text=f"枠 {self.marker.shape_count()} 個")
+        error = self.marker.hotkey_error()
+        self.marker_hotkey_label.configure(
+            text=f"ショートカット: {self.marker.hotkey_label()}"
+                 + (f" — 登録できません（{error}）" if error else "（登録済み）")
+        )
+        marker_color = self.config.marker_color
+        self.marker_preview.configure(text=marker_color.upper(), bg=marker_color,
+                                      fg=_contrast_fg(marker_color))
+        if int(self.var_marker_width.get() or 0) != self.config.marker_width:
+            self.var_marker_width.set(self.config.marker_width)
 
         color = self.config.cursor_color
         if color:
@@ -394,7 +510,21 @@ class AdminWindow:
         else:
             bg, fg = PALETTE.get(state.kind, PALETTE["unknown"])
             self.ime_status.configure(text=f"{state.label}  {state.text}", bg=bg, fg=fg)
+        self._sync_marker_status()
         self.win.after(STATUS_INTERVAL_MS, self._poll_status)
+
+    def _sync_marker_status(self) -> None:
+        """ホットキーで切り替えられた場合でも管理画面の表示を合わせる。"""
+        marker_on = self.marker.active
+        self.marker_button.configure(
+            text="マーカーを停止" if marker_on else "マーカーを開始"
+        )
+        self.marker_status.configure(
+            text="描画中" if marker_on else "停止中",
+            bg="#c62828" if marker_on else "#9e9e9e",
+            fg="#ffffff",
+        )
+        self.marker_count.configure(text=f"枠 {self.marker.shape_count()} 個")
 
     # ================================================================ 開閉
     def show(self) -> None:

@@ -30,6 +30,10 @@ USAGE = """ime_cursor - IME 状態バッジ + マウスカーソルの色・サ�
                                   （pythonw ではなく python で実行すること）
     ime_cursor.pyw --reset-cursor カーソルの色とサイズを既定に戻して終了する
     ime_cursor.pyw --help         この説明を出す
+
+常駐中のショートカット:
+    Ctrl+Shift+L                  プレゼン用マーカーの開始 / 終了
+                                  （モード中はドラッグで赤い枠、Esc で消して終了）
 """
 
 
@@ -91,6 +95,7 @@ def run_gui(show_admin: bool) -> int:
         return 1
 
     from .admin import AdminWindow
+    from .marker import Marker
     from .overlay import Overlay
 
     cfg = config_module.load()
@@ -99,7 +104,12 @@ def run_gui(show_admin: bool) -> int:
     root.withdraw()
 
     overlay = Overlay(root, cfg)
-    admin = AdminWindow(root, cfg, overlay, on_quit=lambda: _quit(root, overlay))
+    marker = Marker(root, cfg)
+    admin = AdminWindow(
+        root, cfg, overlay, marker, on_quit=lambda: _quit(root, overlay, marker)
+    )
+    marker.log = admin.log      # 管理画面ができてからログの行き先を差し替える
+    marker.start_hotkey()       # 登録に失敗してもログに出すだけで常駐は続ける
 
     if show_admin:
         admin.show()
@@ -123,16 +133,19 @@ def run_gui(show_admin: bool) -> int:
         root.after(FLAG_POLL_MS, poll_flag)
 
     root.after(FLAG_POLL_MS, poll_flag)
-    root.protocol("WM_DELETE_WINDOW", lambda: _quit(root, overlay))
+    root.protocol("WM_DELETE_WINDOW", lambda: _quit(root, overlay, marker))
 
     try:
         root.mainloop()
     except KeyboardInterrupt:
-        _quit(root, overlay)
+        _quit(root, overlay, marker)
     return 0
 
 
-def _quit(root, overlay) -> None:
+def _quit(root, overlay, marker=None) -> None:
+    # マーカーを先に畳む。ホットキーの解除とスレッドの終了を待つ必要がある
+    if marker is not None:
+        marker.stop()
     overlay.stop()
     try:
         root.destroy()

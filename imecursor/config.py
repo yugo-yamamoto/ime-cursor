@@ -37,6 +37,37 @@ PALETTE = {
 # 管理画面とバッジで使うフォント。先頭から順に探し、見つかったものを使う
 FONT_CANDIDATES = ("Yu Gothic UI", "游ゴシック", "Meiryo UI", "Meiryo", "BIZ UDGothic")
 
+# ------------------------------------------------ プレゼン用マーカー
+# 描画層のキー色 (-transparentcolor)。この色のピクセルは表示も当たり判定も
+# 抜けるので、誰も描かない色にしておく
+MARKER_KEY_COLOR = "#010203"
+
+MARKER_WIDTH_MIN = 1
+MARKER_WIDTH_MAX = 32
+MARKER_WIDTH_DEFAULT = 4
+
+MARKER_HOTKEY_DEFAULT = "ctrl+shift+l"
+
+# 溜められる枠の数の上限。増えすぎると描画が重くなる
+MARKER_MAX_SHAPES = 200
+
+# 入力を受ける層の不透明度。一律アルファは当たり判定を透過させないので、
+# ほぼ透明にしてもドラッグを拾える。ただし 0.0 は「完全透過」扱いになり
+# 当たり判定が抜けてしまうため、下限を丸める (実測)
+MARKER_CATCH_ALPHA_MIN = 0.01
+MARKER_CATCH_ALPHA_MAX = 0.30
+MARKER_CATCH_ALPHA_DEFAULT = 0.02
+
+# マーカーの色プリセット (表示名, #RRGGBB)
+MARKER_COLOR_PRESETS = (
+    ("レッド", "#ff0000"),
+    ("イエロー", "#ffff00"),
+    ("ライム", "#00ff00"),
+    ("シアン", "#00ffff"),
+    ("マゼンタ", "#ff00ff"),
+    ("ブラック", "#000000"),
+)
+
 # 管理画面のカーソル色プリセット (表示名, #RRGGBB)
 COLOR_PRESETS = (
     ("ライム", "#00ff00"),
@@ -89,6 +120,13 @@ class Config:
     # 初めて色・サイズを変える直前のレジストリ値。「既定に戻す」で使う
     cursor_backup: dict = field(default_factory=dict)
 
+    # -- プレゼン用マーカー ------------------------------------------------
+    marker_hotkey_enabled: bool = True                      # ホットキーを登録するか
+    marker_hotkey: str = MARKER_HOTKEY_DEFAULT              # モードの切り替え
+    marker_color: str = "#ff0000"                           # 枠の色
+    marker_width: int = MARKER_WIDTH_DEFAULT                # 枠の太さ (px)
+    marker_catch_alpha: float = MARKER_CATCH_ALPHA_DEFAULT  # 入力を受ける層の不透明度
+
     # -- 管理画面 ----------------------------------------------------------
     admin_geometry: str = ""      # 前回の管理画面の位置
 
@@ -100,6 +138,22 @@ class Config:
         self.cursor_size = max(CURSOR_SIZE_MIN, min(int(self.cursor_size), CURSOR_SIZE_MAX))
         if self.cursor_color is not None and not _is_hex_color(self.cursor_color):
             self.cursor_color = None
+
+        self.marker_width = max(
+            MARKER_WIDTH_MIN, min(int(self.marker_width), MARKER_WIDTH_MAX)
+        )
+        # 0.0 まで下げると完全透過とみなされ、当たり判定が抜けてドラッグを
+        # 受け取れなくなる。Tk は 1 バイトに量子化するので下限は 0.01
+        self.marker_catch_alpha = max(
+            MARKER_CATCH_ALPHA_MIN,
+            min(float(self.marker_catch_alpha), MARKER_CATCH_ALPHA_MAX),
+        )
+        if not _is_hex_color(self.marker_color):
+            self.marker_color = "#ff0000"
+        if self.marker_color.lower() == MARKER_KEY_COLOR:
+            self.marker_color = "#ff0000"  # キー色と同じだと枠がまるごと消える
+        if not isinstance(self.marker_hotkey, str) or not self.marker_hotkey.strip():
+            self.marker_hotkey = MARKER_HOTKEY_DEFAULT
         return self
 
     def save(self) -> Path:

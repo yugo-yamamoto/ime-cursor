@@ -75,6 +75,32 @@ OCR_HELP = 32651
 SPI_SETCURSORS = 0x0057
 SPIF_SENDCHANGE = 0x02
 
+# -- グローバルホットキー --------------------------------------------------
+# RegisterHotKey に hwnd=NULL を渡すと WM_HOTKEY は「登録したスレッドの」
+# メッセージキューに積まれる。tkinter のメッセージポンプはスレッドメッセージも
+# GetMessage で拾ってしまうが、hwnd が NULL なので DispatchMessage が何もせず
+# 捨ててしまう。つまり Tk 上で待っていても届かない (hotkey.py 参照)
+WM_QUIT = 0x0012
+WM_HOTKEY = 0x0312
+WM_APP = 0x8000
+
+MOD_ALT = 0x0001
+MOD_CONTROL = 0x0002
+MOD_SHIFT = 0x0004
+MOD_WIN = 0x0008
+MOD_NOREPEAT = 0x4000  # 押しっぱなしで連射させない
+
+VK_ESCAPE = 0x1B
+VK_SPACE = 0x20
+
+ERROR_HOTKEY_ALREADY_REGISTERED = 1409
+
+# -- ウィンドウの表示と当たり判定 ------------------------------------------
+SW_HIDE = 0
+SW_SHOWNA = 8      # activate せずに表示する
+PM_NOREMOVE = 0x0000
+GA_ROOT = 2     # GetAncestor: トップレベルまで遡る
+
 # -- 単一インスタンス ------------------------------------------------------
 ERROR_ALREADY_EXISTS = 183
 
@@ -138,6 +164,37 @@ user32.SetSystemCursor.restype = wintypes.BOOL
 user32.DestroyCursor.argtypes = [wintypes.HANDLE]
 user32.DestroyCursor.restype = wintypes.BOOL
 user32.MessageBoxW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT]
+user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+user32.ShowWindow.restype = wintypes.BOOL
+
+user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
+user32.RegisterHotKey.restype = wintypes.BOOL
+user32.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
+user32.UnregisterHotKey.restype = wintypes.BOOL
+user32.GetMessageW.argtypes = [
+    ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT
+]
+user32.GetMessageW.restype = ctypes.c_int  # 失敗時の -1 を取りこぼさない
+user32.PostThreadMessageW.argtypes = [
+    wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM
+]
+user32.PostThreadMessageW.restype = wintypes.BOOL
+user32.PeekMessageW.argtypes = [
+    ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT, wintypes.UINT
+]
+user32.PeekMessageW.restype = wintypes.BOOL
+
+user32.GetForegroundWindow.restype = wintypes.HWND
+user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+user32.SetForegroundWindow.restype = wintypes.BOOL
+user32.IsWindow.argtypes = [wintypes.HWND]
+user32.IsWindow.restype = wintypes.BOOL
+user32.WindowFromPoint.argtypes = [wintypes.POINT]
+user32.WindowFromPoint.restype = wintypes.HWND
+user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+user32.GetAncestor.restype = wintypes.HWND
+
+kernel32.GetCurrentThreadId.restype = wintypes.DWORD
 
 kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
 kernel32.CreateMutexW.restype = wintypes.HANDLE
@@ -224,6 +281,71 @@ def set_system_cursor(handle: int, ocr: int) -> bool:
         return True
     user32.DestroyCursor(handle)
     return False
+
+
+def toplevel_hwnd(widget_id: int) -> int:
+    """tkinter の winfo_id() から、実際のトップレベル HWND を得る。
+
+    Tk のトップレベルは Tk が用意したラッパーウィンドウの子になっている。
+    拡張スタイルはラッパー側に付けないと効かない (当たり判定もラッパー単位で
+    決まる) ので、必ずこれを通す。
+    """
+    return int(user32.GetParent(widget_id) or widget_id)
+
+
+def get_ex_style(hwnd: int) -> int:
+    return int(GetWindowLong(hwnd, GWL_EXSTYLE))
+
+
+def add_ex_style(hwnd: int, flags: int) -> int:
+    """既存の拡張スタイルを壊さずに追加する。
+
+    読んで足して書き戻すので、Tk が自分で付けた WS_EX_LAYERED
+    (-alpha / -transparentcolor を指定すると付く) を消さない。
+    """
+    style = get_ex_style(hwnd) | flags
+    SetWindowLong(hwnd, GWL_EXSTYLE, style)
+    return style
+
+
+def show_window_no_activate(hwnd: int) -> None:
+    """フォアグラウンドを奪わずにウィンドウを出す。
+
+    Tk の deiconify() は内部で ShowWindow(SW_RESTORE) を呼ぶため、
+    WS_EX_NOACTIVATE を付けていても表示の瞬間に活性化してしまう (実測)。
+    プレゼン中に下のアプリからフォーカスを奪わないよう、表示と非表示は
+    Tk ではなく SW_SHOWNA / SW_HIDE で直接行う。
+    """
+    user32.ShowWindow(hwnd, SW_SHOWNA)
+
+
+def hide_window(hwnd: int) -> None:
+    user32.ShowWindow(hwnd, SW_HIDE)
+
+
+def foreground_window() -> int:
+    return int(user32.GetForegroundWindow() or 0)
+
+
+def restore_foreground(hwnd: int) -> bool:
+    """フォアグラウンドを hwnd に返す。
+
+    Tk の deiconify() は内部で ShowWindow(SW_RESTORE) を呼ぶため、
+    WS_EX_NOACTIVATE を付けていてもその瞬間だけ活性化してしまう
+    (実測)。表示した直後にこれを呼んで、元のアプリに返す。
+    こちらがフォアグラウンドを持っている間の呼び出しなので拒否されない。
+    """
+    if not hwnd or not user32.IsWindow(hwnd):
+        return False
+    return bool(user32.SetForegroundWindow(hwnd))
+
+
+def window_at(x: int, y: int) -> int:
+    """その座標のクリックを受け取るトップレベル HWND (当たり判定の確認用)。"""
+    found = user32.WindowFromPoint(wintypes.POINT(x, y))
+    if not found:
+        return 0
+    return int(user32.GetAncestor(found, GA_ROOT) or found)
 
 
 def virtual_screen() -> tuple[int, int, int, int]:
