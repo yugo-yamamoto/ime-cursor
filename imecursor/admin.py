@@ -205,6 +205,13 @@ class AdminWindow:
         self.marker_preview = self._color_label(opts, self.open_marker_color_popup, 12)
         self.marker_preview.pack(side="left")
 
+        self.var_marker_indicator = tk.BooleanVar(
+            value=self.config.marker_show_indicator
+        )
+        ttk.Checkbutton(box, text="モード中に左上へ操作説明を出す",
+                        variable=self.var_marker_indicator,
+                        command=self._on_marker_option).pack(anchor="w", pady=(8, 0))
+
     def _color_label(self, parent: ttk.Frame, command, width: int) -> tk.Label:
         """いまの色を出し、押すと色のポップアップを開くラベル。
 
@@ -366,11 +373,15 @@ class AdminWindow:
             self.config.marker_width = int(self.var_marker_width.get())
         except (tk.TclError, ValueError):
             return
+        self.config.marker_show_indicator = bool(self.var_marker_indicator.get())
         self.config.clamp()
         self.marker.apply_config()
         self._save()
         self._sync_widgets()
-        self.log(f"マーカーの線の太さを {self.config.marker_width}px にしました")
+        self.log(
+            f"マーカー: 線の太さ {self.config.marker_width}px / "
+            f"操作説明 {'あり' if self.config.marker_show_indicator else 'なし'}"
+        )
 
     # -- 色 ----------------------------------------------------------------
     def open_cursor_color_popup(self) -> None:
@@ -471,6 +482,8 @@ class AdminWindow:
                                       bg=marker_color, fg=contrast_fg(marker_color))
         if int(self.var_marker_width.get() or 0) != self.config.marker_width:
             self.var_marker_width.set(self.config.marker_width)
+        if bool(self.var_marker_indicator.get()) != self.config.marker_show_indicator:
+            self.var_marker_indicator.set(self.config.marker_show_indicator)
 
         color = self.config.cursor_color
         if color:

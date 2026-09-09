@@ -332,10 +332,16 @@ class Marker:
         self._band = None
 
     def _draw_indicator(self) -> None:
-        """モード中であることと操作方法を左上に出す。"""
+        """モード中であることと操作方法を左上に出す。
+
+        設定で切ってあるときは何も描かない。慣れたあとや、画面を録る
+        ときに邪魔になるため。
+        """
         if self.canvas is None:
             return
         self.canvas.delete(TAG_UI)
+        if not self.config.marker_show_indicator:
+            return
         text = f"マーカー ON   ドラッグ=枠   Esc=消して終了   {self.hotkey_label()}=終了"
         pad = 10
         item = self.canvas.create_text(

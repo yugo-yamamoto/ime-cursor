@@ -126,6 +126,7 @@ class Config:
     marker_color: str = "#ff0000"                           # 枠の色
     marker_width: int = MARKER_WIDTH_DEFAULT                # 枠の太さ (px)
     marker_catch_alpha: float = MARKER_CATCH_ALPHA_DEFAULT  # 入力を受ける層の不透明度
+    marker_show_indicator: bool = True                      # 左上に操作説明を出すか
 
     # -- 管理画面 ----------------------------------------------------------
     admin_geometry: str = ""      # 前回の管理画面の位置
