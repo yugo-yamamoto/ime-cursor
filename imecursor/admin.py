@@ -14,9 +14,10 @@ import re
 import time
 import tkinter as tk
 import tkinter.font as tkfont
-from tkinter import colorchooser, messagebox, ttk
+from tkinter import messagebox, ttk
 
 from . import cursortheme
+from .colorpicker import ask_color
 from .config import (
     COLOR_PRESETS,
     CURSOR_SIZE_MAX,
@@ -27,7 +28,7 @@ from .config import (
     PALETTE,
     Config,
     config_path,
-    hex_to_rgb,
+    contrast_fg,
 )
 from .marker import Marker
 from .overlay import Overlay, pick_font_family
@@ -45,17 +46,15 @@ STATUS_INTERVAL_MS = 200
 # ログ欄に残す最大行数
 LOG_MAX_LINES = 500
 
-DEFAULT_COLOR = "#00a0ff"
+# セクション間の余白 (px)。塊が分かれて見えるよう広めに取る
+SECTION_GAP = 14
+
+# 「クリックすると変えられる」ことを示す印
+CLICK_HINT = "  ▾"
 
 # 管理画面の位置だけを表すジオメトリ。マルチモニタで原点が負のときは
 # Tk が "+-1920+0" の形を返すので、符号の重なりも許す
 _POSITION_ONLY = re.compile(r"[+-]-?\d+[+-]-?\d+")
-
-
-def _contrast_fg(color: str) -> str:
-    """背景色に対して読める文字色 (白か黒) を返す。"""
-    r, g, b = hex_to_rgb(color)
-    return "#000000" if (r * 77 + g * 151 + b * 28) >> 8 > 140 else "#ffffff"
 
 
 class AdminWindow:
@@ -77,6 +76,7 @@ class AdminWindow:
             except tk.TclError:
                 pass
         self.mono = tkfont.Font(family="Consolas", size=9)
+        self.heading = tkfont.Font(family=family, size=11, weight="bold")
 
         self.win = tk.Toplevel(root)
         self.win.title("ime_cursor 管理画面")
@@ -115,10 +115,23 @@ class AdminWindow:
         self._build_footer(outer)
         self._build_log_section(outer)
 
+    def _section(self, parent: ttk.Frame, title: str) -> ttk.Frame:
+        """見出し + 下線 + 中身の入れ物を作って返す。
+
+        ttk.LabelFrame は Windows のテーマだと枠線がごく淡く、セクションの
+        切れ目が読み取れない。太字の見出しと罫線 1 本に置き換えている。
+        """
+        holder = ttk.Frame(parent)
+        holder.pack(fill="x", pady=(0, SECTION_GAP))
+        ttk.Label(holder, text=title, font=self.heading).pack(anchor="w")
+        ttk.Separator(holder, orient="horizontal").pack(fill="x", pady=(3, 8))
+        body = ttk.Frame(holder)
+        body.pack(fill="x", padx=2)
+        return body
+
     # -- IME モード表示 ----------------------------------------------------
     def _build_badge_section(self, parent: ttk.Frame) -> None:
-        box = ttk.LabelFrame(parent, text=" IME モード表示 ", padding=10)
-        box.pack(fill="x", pady=(0, 8))
+        box = self._section(parent, "IME モード表示")
 
         row = ttk.Frame(box)
         row.pack(fill="x")
@@ -164,8 +177,7 @@ class AdminWindow:
 
     # -- プレゼン用マーカー ------------------------------------------------
     def _build_marker_section(self, parent: ttk.Frame) -> None:
-        box = ttk.LabelFrame(parent, text=" プレゼン用マーカー（矩形） ", padding=10)
-        box.pack(fill="x", pady=(0, 8))
+        box = self._section(parent, "プレゼン用マーカー（矩形）")
 
         row = ttk.Frame(box)
         row.pack(fill="x")
@@ -181,17 +193,6 @@ class AdminWindow:
         self.marker_hotkey_label = ttk.Label(box, text="")
         self.marker_hotkey_label.pack(anchor="w", pady=(8, 0))
 
-        swatches = ttk.Frame(box)
-        swatches.pack(fill="x", pady=(8, 0))
-        for label, color in MARKER_COLOR_PRESETS:
-            tk.Button(
-                swatches, text=label, bg=color, fg=_contrast_fg(color),
-                activebackground=color, width=7, bd=1, relief="raised",
-                command=lambda c=color: self.set_marker_color(c),
-            ).pack(side="left", padx=(0, 4))
-        ttk.Button(swatches, text="色を選ぶ…",
-                   command=self.choose_marker_color).pack(side="left", padx=(4, 0))
-
         opts = ttk.Frame(box)
         opts.pack(fill="x", pady=(8, 0))
         ttk.Label(opts, text="線の太さ").pack(side="left")
@@ -200,47 +201,34 @@ class AdminWindow:
                     textvariable=self.var_marker_width,
                     command=self._on_marker_option).pack(side="left", padx=(6, 2))
         ttk.Label(opts, text="px").pack(side="left")
-        ttk.Label(opts, text="いまの色:").pack(side="left", padx=(16, 4))
-        self.marker_preview = tk.Label(opts, text="", width=12, padx=8, pady=4, bd=2,
-                                       relief="groove")
+        ttk.Label(opts, text="色").pack(side="left", padx=(16, 4))
+        self.marker_preview = self._color_label(opts, self.open_marker_color_popup, 12)
         self.marker_preview.pack(side="left")
+
+    def _color_label(self, parent: ttk.Frame, command, width: int) -> tk.Label:
+        """いまの色を出し、押すと色のポップアップを開くラベル。
+
+        色見本ボタンを機能ごとに並べるとパネルが色ボタンで埋まるので、
+        現在の色を出すラベル自体を入り口にしている。
+        """
+        label = tk.Label(parent, text="", width=width, padx=8, pady=4, bd=2,
+                         relief="raised", cursor="hand2")
+        label.bind("<Button-1>", lambda _e: command())
+        return label
 
     # -- マウスカーソルの色 ------------------------------------------------
     def _build_color_section(self, parent: ttk.Frame) -> None:
-        box = ttk.LabelFrame(parent, text=" マウスカーソルの色 ", padding=10)
-        box.pack(fill="x", pady=(0, 8))
-
-        self.var_color_mode = tk.StringVar(
-            value="custom" if self.config.cursor_color else "system"
-        )
-        ttk.Radiobutton(box, text="変更しない（Windows の設定のまま）",
-                        value="system", variable=self.var_color_mode,
-                        command=self._on_color_mode).pack(anchor="w")
-        ttk.Radiobutton(box, text="色を指定する", value="custom",
-                        variable=self.var_color_mode,
-                        command=self._on_color_mode).pack(anchor="w")
-
-        swatches = ttk.Frame(box)
-        swatches.pack(fill="x", pady=(8, 0))
-        for label, color in COLOR_PRESETS:
-            tk.Button(
-                swatches, text=label, bg=color, fg=_contrast_fg(color),
-                activebackground=color, width=7, bd=1, relief="raised",
-                command=lambda c=color: self.set_cursor_color(c),
-            ).pack(side="left", padx=(0, 4))
+        box = self._section(parent, "マウスカーソルの色")
 
         row = ttk.Frame(box)
-        row.pack(fill="x", pady=(8, 0))
-        ttk.Button(row, text="色を選ぶ…", command=self.choose_cursor_color).pack(side="left")
-        ttk.Label(row, text="いまの色:").pack(side="left", padx=(12, 4))
-        self.color_preview = tk.Label(row, text="", width=20, padx=8, pady=4, bd=2,
-                                      relief="groove")
+        row.pack(fill="x")
+        ttk.Label(row, text="色").pack(side="left", padx=(0, 4))
+        self.color_preview = self._color_label(row, self.open_cursor_color_popup, 22)
         self.color_preview.pack(side="left")
 
     # -- マウスカーソルのサイズ --------------------------------------------
     def _build_size_section(self, parent: ttk.Frame) -> None:
-        box = ttk.LabelFrame(parent, text=" マウスカーソルのサイズ ", padding=10)
-        box.pack(fill="x", pady=(0, 8))
+        box = self._section(parent, "マウスカーソルのサイズ")
 
         row = ttk.Frame(box)
         row.pack(fill="x")
@@ -277,8 +265,7 @@ class AdminWindow:
         ttk.Button(row, text="終了", command=self.quit).pack(side="right", padx=(0, 6))
 
     def _build_log_section(self, parent: ttk.Frame) -> None:
-        box = ttk.LabelFrame(parent, text=" ログ ", padding=8)
-        box.pack(fill="both", expand=True)
+        box = self._section(parent, "ログ")
 
         wrap = ttk.Frame(box)
         wrap.pack(fill="both", expand=True)
@@ -358,19 +345,19 @@ class AdminWindow:
         self.log(f"マーカーの枠 {removed} 個を消しました")
         self._sync_widgets()
 
-    def set_marker_color(self, color: str) -> None:
+    def open_marker_color_popup(self) -> None:
+        changed, color = ask_color(
+            self.win, self.config.marker_color, MARKER_COLOR_PRESETS,
+            title="マーカーの色", near=self.marker_preview,
+        )
+        if not changed or color is None:
+            return
         self.config.marker_color = color
         self.config.clamp()
         self.marker.apply_config()
         self._save()
         self._sync_widgets()
         self.log(f"マーカーの色を {self.config.marker_color} にしました")
-
-    def choose_marker_color(self) -> None:
-        _rgb, picked = colorchooser.askcolor(color=self.config.marker_color,
-                                             parent=self.win, title="マーカーの色")
-        if picked:
-            self.set_marker_color(picked.lower())
 
     def _on_marker_option(self) -> None:
         if self._suppress:
@@ -386,26 +373,20 @@ class AdminWindow:
         self.log(f"マーカーの線の太さを {self.config.marker_width}px にしました")
 
     # -- 色 ----------------------------------------------------------------
-    def _on_color_mode(self) -> None:
-        if self._suppress:
+    def open_cursor_color_popup(self) -> None:
+        changed, color = ask_color(
+            self.win, self.config.cursor_color, COLOR_PRESETS,
+            title="マウスカーソルの色", allow_none=True,
+            none_label="Windows の設定のまま", near=self.color_preview,
+        )
+        if not changed:
             return
-        if self.var_color_mode.get() == "system":
-            self.config.cursor_color = None
-            self._apply_cursor("カーソル色を Windows の設定に戻します")
-        else:
-            self.set_cursor_color(self.config.cursor_color or DEFAULT_COLOR)
-
-    def set_cursor_color(self, color: str) -> None:
         self.config.cursor_color = color
-        self.var_color_mode.set("custom")
-        self._apply_cursor(f"カーソル色を {color} にします")
-
-    def choose_cursor_color(self) -> None:
-        initial = self.config.cursor_color or DEFAULT_COLOR
-        _rgb, picked = colorchooser.askcolor(color=initial, parent=self.win,
-                                             title="マウスカーソルの色")
-        if picked:
-            self.set_cursor_color(picked.lower())
+        self.config.clamp()
+        self._apply_cursor(
+            "カーソル色を Windows の設定に戻します" if color is None
+            else f"カーソル色を {self.config.cursor_color} にします"
+        )
 
     # -- サイズ ------------------------------------------------------------
     def set_cursor_size(self, size: int) -> None:
@@ -445,7 +426,6 @@ class AdminWindow:
             cursortheme.restore_default(self.config, log=self.log)
         except Exception as exc:
             self.log(f"失敗: {type(exc).__name__}: {exc}")
-        self.var_color_mode.set("system")
         self.var_size.set(self.config.cursor_size)
         self._sync_widgets()
         self._save()
@@ -487,17 +467,18 @@ class AdminWindow:
                  + (f" — 登録できません（{error}）" if error else "（登録済み）")
         )
         marker_color = self.config.marker_color
-        self.marker_preview.configure(text=marker_color.upper(), bg=marker_color,
-                                      fg=_contrast_fg(marker_color))
+        self.marker_preview.configure(text=marker_color.upper() + CLICK_HINT,
+                                      bg=marker_color, fg=contrast_fg(marker_color))
         if int(self.var_marker_width.get() or 0) != self.config.marker_width:
             self.var_marker_width.set(self.config.marker_width)
 
         color = self.config.cursor_color
         if color:
-            self.color_preview.configure(text=color.upper(), bg=color, fg=_contrast_fg(color))
+            self.color_preview.configure(text=color.upper() + CLICK_HINT,
+                                         bg=color, fg=contrast_fg(color))
         else:
-            self.color_preview.configure(text="Windows の設定のまま", bg="#f0f0f0",
-                                         fg="#000000")
+            self.color_preview.configure(text="Windows の設定のまま" + CLICK_HINT,
+                                         bg="#f0f0f0", fg="#000000")
 
         self.size_value.configure(text=f"{self.config.cursor_size} px")
         if int(self.var_size.get()) != self.config.cursor_size:

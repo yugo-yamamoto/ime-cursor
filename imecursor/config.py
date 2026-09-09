@@ -136,8 +136,8 @@ class Config:
         self.alpha = max(0.1, min(float(self.alpha), 1.0))
         self.interval_ms = max(10, min(int(self.interval_ms), 1000))
         self.cursor_size = max(CURSOR_SIZE_MIN, min(int(self.cursor_size), CURSOR_SIZE_MAX))
-        if self.cursor_color is not None and not _is_hex_color(self.cursor_color):
-            self.cursor_color = None
+        if self.cursor_color is not None:
+            self.cursor_color = normalize_hex_color(self.cursor_color)
 
         self.marker_width = max(
             MARKER_WIDTH_MIN, min(int(self.marker_width), MARKER_WIDTH_MAX)
@@ -148,9 +148,8 @@ class Config:
             MARKER_CATCH_ALPHA_MIN,
             min(float(self.marker_catch_alpha), MARKER_CATCH_ALPHA_MAX),
         )
-        if not _is_hex_color(self.marker_color):
-            self.marker_color = "#ff0000"
-        if self.marker_color.lower() == MARKER_KEY_COLOR:
+        self.marker_color = normalize_hex_color(self.marker_color) or "#ff0000"
+        if self.marker_color == MARKER_KEY_COLOR:
             self.marker_color = "#ff0000"  # キー色と同じだと枠がまるごと消える
         if not isinstance(self.marker_hotkey, str) or not self.marker_hotkey.strip():
             self.marker_hotkey = MARKER_HOTKEY_DEFAULT
@@ -168,14 +167,28 @@ class Config:
         return path
 
 
-def _is_hex_color(value: object) -> bool:
-    if not isinstance(value, str) or len(value) != 7 or not value.startswith("#"):
-        return False
+def normalize_hex_color(text: object) -> str | None:
+    """色の指定を "#rrggbb" に揃える。解釈できなければ None。
+
+    "#f00" / "ff0000" / "#FF0000" のような書き方をまとめて受け取るため、
+    設定ファイルを手で書き換えたときにも、ポップアップの入力欄にも使える。
+    """
+    if not isinstance(text, str):
+        return None
+    value = text.strip().lstrip("#").lower()
+    if len(value) == 3:
+        value = "".join(ch * 2 for ch in value)  # #f00 -> #ff0000
+    if len(value) != 6:
+        return None
     try:
-        int(value[1:], 16)
+        int(value, 16)
     except ValueError:
-        return False
-    return True
+        return None
+    return f"#{value}"
+
+
+def _is_hex_color(value: object) -> bool:
+    return normalize_hex_color(value) is not None
 
 
 def load() -> Config:
@@ -191,6 +204,12 @@ def load() -> Config:
         return Config()
     known = {f.name for f in fields(Config)}
     return Config(**{k: v for k, v in raw.items() if k in known}).clamp()
+
+
+def contrast_fg(color: str) -> str:
+    """背景色に対して読める文字色 (白か黒) を返す。"""
+    r, g, b = hex_to_rgb(color)
+    return "#000000" if (r * 77 + g * 151 + b * 28) >> 8 > 140 else "#ffffff"
 
 
 def hex_to_rgb(value: str) -> tuple[int, int, int]:
