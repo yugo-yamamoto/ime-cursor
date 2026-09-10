@@ -16,7 +16,9 @@
 from __future__ import annotations
 
 import queue
+import sys
 import threading
+from tkinter import TclError as tk_error
 
 from .win32 import (
     ERROR_HOTKEY_ALREADY_REGISTERED,
@@ -114,6 +116,9 @@ class HotkeyListener:
         self._next_id = 1
         self._errors: dict[str, str] = {}    # 名前 -> 失敗理由
         self._lock = threading.Lock()
+        self._pumping = False                # Tk 側のポーリングを続けるか
+        self._root = None                    # ポーリングを張っている Tk のルート
+        self._after_id: str | None = None    # 入れてある after の予約
 
     # ---------------------------------------------------------------- 起動
     def start(self) -> bool:
@@ -167,7 +172,13 @@ class HotkeyListener:
         root.after で自分を再スケジュールし続ける。on_hotkey は Tk スレッドで
         呼ばれるので、そのままウィジェットを触ってよい。
         """
+        self._pumping = True
+        self._root = root
+
         def poll() -> None:
+            self._after_id = None
+            if not self._pumping:
+                return
             while True:
                 try:
                     name = self._queue.get_nowait()
@@ -175,15 +186,30 @@ class HotkeyListener:
                     break
                 try:
                     on_hotkey(name)
-                except Exception:
-                    pass  # 1 回の失敗でポーリングを止めない
-            root.after(interval_ms, poll)
+                except Exception as exc:
+                    # 1 回の失敗でポーリングを止めない。ただし黙って捨てない
+                    # (ここで飲み込むと、抜けられない不具合の原因が見えなくなる)
+                    print(f"ime_cursor: ホットキー {name} の処理で例外: "
+                          f"{type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+            try:
+                self._after_id = root.after(interval_ms, poll)
+            except tk_error:
+                self._pumping = False  # root が壊された後は静かに止まる
 
-        root.after(interval_ms, poll)
+        self._after_id = root.after(interval_ms, poll)
 
     # ---------------------------------------------------------------- 終了
     def stop(self) -> None:
         """スレッドを畳む。登録の解除は登録したスレッド自身にやらせる。"""
+        # 入れてある after を取り消す。残したまま root.destroy() されると
+        # 「invalid command name ...poll」で Tcl のエラーになる
+        self._pumping = False
+        if self._after_id is not None and self._root is not None:
+            try:
+                self._root.after_cancel(self._after_id)
+            except tk_error:
+                pass
+            self._after_id = None
         if not self.alive:
             return
         self._post(WM_QUIT, 0, 0)

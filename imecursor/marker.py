@@ -93,12 +93,22 @@ class Marker:
 
     # ================================================================ ホットキー
     def start_hotkey(self) -> None:
-        """モード切り替えのホットキーを登録する。失敗しても常駐は続ける。"""
-        if not self.config.marker_hotkey_enabled:
-            self.log("マーカーのホットキーは無効に設定されています")
-            return
+        """ホットキーの待ち受けを始める。失敗しても常駐は続ける。
+
+        待ち受けスレッドは、モード切り替えのホットキーを無効にしていても
+        必ず起動する。モード中の Escape はこのスレッド経由で登録するので、
+        止めてしまうと「管理画面から開始したのに Escape で抜けられない」
+        という出口のない状態になる。
+        """
         if not self._hotkeys.start():
-            self.log("警告: ホットキーの待ち受けスレッドを起動できませんでした")
+            self.log("警告: ホットキーの待ち受けスレッドを起動できませんでした。"
+                     "Escape で抜けられないので、右クリックか管理画面で停止してください")
+            return
+        self._hotkeys.pump(self.root, self._on_hotkey)
+
+        if not self.config.marker_hotkey_enabled:
+            self.log("マーカー: ショートカットは無効。管理画面のボタンで開始できます"
+                     "（モード中の Escape と右クリックは使えます）")
             return
 
         combo = self.config.marker_hotkey
@@ -109,7 +119,6 @@ class Marker:
             self.config.marker_hotkey = combo = MARKER_HOTKEY_DEFAULT
             self._hotkeys.register(HOTKEY_TOGGLE, combo)
 
-        self._hotkeys.pump(self.root, self._on_hotkey)
         self.log(f"マーカー: {self.hotkey_label()} でモードを切り替えます")
 
     def hotkey_label(self) -> str:
@@ -117,6 +126,16 @@ class Marker:
 
     def hotkey_error(self) -> str | None:
         return self._hotkeys.error_for(HOTKEY_TOGGLE)
+
+    def _register_escape(self) -> bool:
+        """モード中だけ Escape を奪う。常時登録すると他アプリの Escape を潰す。"""
+        if not self._hotkeys.alive:
+            return False
+        try:
+            self._hotkeys.register(HOTKEY_ESCAPE, "escape")
+        except ValueError:
+            return False
+        return True
 
     def _on_hotkey(self, name: str) -> None:
         if name == HOTKEY_TOGGLE:
@@ -180,10 +199,9 @@ class Marker:
         self._draw_indicator()
         # 表示した直後のフレームから正しい内容を出す (描き直しを待たない)
         self.canvas.update_idletasks()
-        try:
-            self._hotkeys.register(HOTKEY_ESCAPE, "escape")
-        except ValueError:
-            pass
+        if not self._register_escape():
+            self.log("警告: Escape を登録できませんでした。"
+                     "右クリックか管理画面の「マーカーを停止」で抜けてください")
         self._watch()
         self.log("マーカーを開始しました（ドラッグで枠、Esc で消去して終了）")
 
