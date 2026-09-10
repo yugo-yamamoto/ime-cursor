@@ -164,15 +164,14 @@ class AdminWindow:
         size_row.pack(fill="x", pady=(8, 0))
         ttk.Label(size_row, text="文字サイズ").pack(side="left")
         self.var_font_size = tk.IntVar(value=self.config.font_size)
-        ttk.Spinbox(size_row, from_=8, to=72, width=5, textvariable=self.var_font_size,
-                    command=self._on_badge_option).pack(side="left", padx=(6, 2))
+        self._spinbox(size_row, self.var_font_size, self._on_badge_option,
+                      from_=8, to=72, width=5).pack(side="left", padx=(6, 2))
         ttk.Label(size_row, text="px").pack(side="left")
 
         ttk.Label(size_row, text="不透明度").pack(side="left", padx=(16, 6))
         self.var_alpha = tk.IntVar(value=round(self.config.alpha * 100))
-        ttk.Spinbox(size_row, from_=10, to=100, increment=5, width=5,
-                    textvariable=self.var_alpha,
-                    command=self._on_badge_option).pack(side="left", padx=(0, 2))
+        self._spinbox(size_row, self.var_alpha, self._on_badge_option,
+                      from_=10, to=100, increment=5, width=5).pack(side="left", padx=(0, 2))
         ttk.Label(size_row, text="%").pack(side="left")
 
     # -- プレゼン用マーカー ------------------------------------------------
@@ -197,9 +196,9 @@ class AdminWindow:
         opts.pack(fill="x", pady=(8, 0))
         ttk.Label(opts, text="線の太さ").pack(side="left")
         self.var_marker_width = tk.IntVar(value=self.config.marker_width)
-        ttk.Spinbox(opts, from_=MARKER_WIDTH_MIN, to=MARKER_WIDTH_MAX, width=5,
-                    textvariable=self.var_marker_width,
-                    command=self._on_marker_option).pack(side="left", padx=(6, 2))
+        self._spinbox(opts, self.var_marker_width, self._on_marker_option,
+                      from_=MARKER_WIDTH_MIN, to=MARKER_WIDTH_MAX,
+                      width=5).pack(side="left", padx=(6, 2))
         ttk.Label(opts, text="px").pack(side="left")
         ttk.Label(opts, text="色").pack(side="left", padx=(16, 4))
         self.marker_preview = self._color_label(opts, self.open_marker_color_popup, 12)
@@ -212,7 +211,18 @@ class AdminWindow:
                         variable=self.var_marker_indicator,
                         command=self._on_marker_option).pack(anchor="w", pady=(8, 0))
 
-    def _color_label(self, parent: ttk.Frame, command, width: int) -> tk.Label:
+    def _spinbox(self, parent: ttk.Frame, variable, command, **kwargs) -> ttk.Spinbox:
+        """数字を打ち込んでも反映される Spinbox。
+
+        ttk.Spinbox の command は上下の矢印を押したときだけ呼ばれる。
+        打ち込んだ値も効くように Enter とフォーカス外れも拾う。
+        """
+        box = ttk.Spinbox(parent, textvariable=variable, command=command, **kwargs)
+        box.bind("<Return>", lambda _e: command())
+        box.bind("<FocusOut>", lambda _e: command())
+        return box
+
+    def _color_label(self, parent: ttk.Frame, command: object, width: int) -> tk.Label:
         """いまの色を出し、押すと色のポップアップを開くラベル。
 
         色見本ボタンを機能ごとに並べるとパネルが色ボタンで埋まるので、
@@ -334,6 +344,9 @@ class AdminWindow:
         except (tk.TclError, ValueError):
             pass
         self.config.clamp()
+        # 丸められた場合に、欄の表示を実際に効いた値へそろえる
+        self.var_font_size.set(self.config.font_size)
+        self.var_alpha.set(round(self.config.alpha * 100))
         self.overlay.apply_config()
         self._save()
         self.log(
