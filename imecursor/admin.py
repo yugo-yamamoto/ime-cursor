@@ -20,8 +20,6 @@ from . import cursortheme
 from .colorpicker import ask_color
 from .config import (
     COLOR_PRESETS,
-    CURSOR_SIZE_MAX,
-    CURSOR_SIZE_MIN,
     MARKER_COLOR_PRESETS,
     MARKER_WIDTH_MAX,
     MARKER_WIDTH_MIN,
@@ -36,9 +34,6 @@ from .win32 import cursor_pixel_size
 
 # サイズのショートカット。Windows の設定画面のスライダーに近い刻み
 SIZE_PRESETS = (32, 48, 64, 96, 128, 192, 256)
-
-# サイズのスライダーの刻み (px)
-SIZE_STEP = 8
 
 # 「いまの IME」表示の更新間隔 (ミリ秒)
 STATUS_INTERVAL_MS = 200
@@ -249,27 +244,12 @@ class AdminWindow:
 
         row = ttk.Frame(box)
         row.pack(fill="x")
-        self.var_size = tk.IntVar(value=self.config.cursor_size)
-        self.size_scale = tk.Scale(
-            row, from_=CURSOR_SIZE_MIN, to=CURSOR_SIZE_MAX, resolution=SIZE_STEP,
-            orient="horizontal", variable=self.var_size, showvalue=False, length=320,
-            highlightthickness=0, takefocus=True,
-        )
-        self.size_scale.pack(side="left")
-        # ドラッグ中は適用しない (離したときだけレジストリに書く)
-        self.size_scale.bind("<ButtonRelease-1>", lambda _e: self.apply_cursor_size())
-        self.size_scale.bind("<KeyRelease>", lambda _e: self.apply_cursor_size())
-
-        self.size_value = ttk.Label(row, text="", width=8)
-        self.size_value.pack(side="left", padx=(10, 0))
-
-        presets = ttk.Frame(box)
-        presets.pack(fill="x", pady=(8, 0))
-        ttk.Label(presets, text="よく使うサイズ:").pack(side="left", padx=(0, 6))
         for size in SIZE_PRESETS:
-            ttk.Button(presets, text=str(size), width=5,
+            ttk.Button(row, text=str(size), width=5,
                        command=lambda s=size: self.set_cursor_size(s)).pack(
                            side="left", padx=(0, 3))
+        self.size_value = ttk.Label(row, text="")
+        self.size_value.pack(side="left", padx=(12, 0))
 
     # -- 下部 --------------------------------------------------------------
     def _build_footer(self, parent: ttk.Frame) -> None:
@@ -414,18 +394,11 @@ class AdminWindow:
 
     # -- サイズ ------------------------------------------------------------
     def set_cursor_size(self, size: int) -> None:
-        self.var_size.set(size)
-        self.apply_cursor_size()
-
-    def apply_cursor_size(self) -> None:
-        if self._suppress:
-            return
-        size = int(self.var_size.get())
-        if size == self.config.cursor_size:
-            self._sync_widgets()
+        if self._suppress or size == self.config.cursor_size:
             return
         self.config.cursor_size = size
-        self._apply_cursor(f"カーソルサイズを {size}px にします")
+        self.config.clamp()
+        self._apply_cursor(f"カーソルサイズを {self.config.cursor_size}px にします")
 
     # -- 共通 --------------------------------------------------------------
     def _apply_cursor(self, headline: str) -> None:
@@ -450,7 +423,6 @@ class AdminWindow:
             cursortheme.restore_default(self.config, log=self.log)
         except Exception as exc:
             self.log(f"失敗: {type(exc).__name__}: {exc}")
-        self.var_size.set(self.config.cursor_size)
         self._sync_widgets()
         self._save()
 
@@ -506,9 +478,7 @@ class AdminWindow:
             self.color_preview.configure(text="Windows の設定のまま" + CLICK_HINT,
                                          bg="#f0f0f0", fg="#000000")
 
-        self.size_value.configure(text=f"{self.config.cursor_size} px")
-        if int(self.var_size.get()) != self.config.cursor_size:
-            self.var_size.set(self.config.cursor_size)
+        self.size_value.configure(text=f"いま {self.config.cursor_size} px")
 
     def _poll_status(self) -> None:
         state = self.overlay.last_state
