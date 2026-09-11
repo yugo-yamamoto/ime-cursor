@@ -113,6 +113,12 @@ class Config:
     follow_cursor_size: bool = True  # カーソルが大きいときオフセットも広げる
     interval_ms: int = 30         # 位置と状態の更新間隔 (ミリ秒)
 
+    # -- コピー通知 --------------------------------------------------------
+    clip_notice_enabled: bool = True    # クリップボードが変わったら通知を出すか
+    clip_notice_preview: bool = True    # コピーした内容の先頭も出すか
+    clip_notice_ms: int = 1400          # 通知を出しておく時間 (ミリ秒)
+    clip_font_size: int = 15            # 通知の文字サイズ (px)。高 DPI では自動で拡大する
+
     # -- マウスカーソル ----------------------------------------------------
     cursor_color: str | None = None       # None なら Windows 既定のまま
     cursor_size: int = CURSOR_SIZE_DEFAULT
@@ -136,6 +142,8 @@ class Config:
         self.font_size = max(6, min(int(self.font_size), 200))
         self.alpha = max(0.1, min(float(self.alpha), 1.0))
         self.interval_ms = max(10, min(int(self.interval_ms), 1000))
+        self.clip_notice_ms = max(300, min(int(self.clip_notice_ms), 10000))
+        self.clip_font_size = max(8, min(int(self.clip_font_size), 72))
         self.cursor_size = max(CURSOR_SIZE_MIN, min(int(self.cursor_size), CURSOR_SIZE_MAX))
         if self.cursor_color is not None:
             self.cursor_color = normalize_hex_color(self.cursor_color)

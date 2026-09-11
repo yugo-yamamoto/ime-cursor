@@ -24,6 +24,7 @@ from .win32 import (
     GetWindowLong,
     SetWindowLong,
     cursor_pixel_size,
+    dpi_scale_at,
     user32,
     virtual_screen,
 )
@@ -36,6 +37,21 @@ IDLE_INTERVAL_MS = 200
 # offset_* は 32px のカーソルを前提にした値。それより大きいカーソルでは
 # バッジがカーソルの下に隠れるので、この比率で押し出す
 BASE_CURSOR_SIZE = 32
+
+# 文字まわりの余白。font_size と同じく 96dpi での px (モニタの拡大率を掛ける)
+PADDING_X = 6
+PADDING_Y = 1
+
+
+def cursor_scale(follow: bool) -> float:
+    """カーソルが大きいときに、表示物を押し出す倍率。
+
+    バッジもコピー通知も、32px のカーソルを前提にしたオフセットを持っている。
+    カーソルを大きくしているとその下に隠れるので、この倍率で広げる。
+    """
+    if not follow:
+        return 1.0
+    return max(1.0, cursor_pixel_size() / BASE_CURSOR_SIZE)
 
 
 def pick_font_family() -> str:
@@ -54,6 +70,7 @@ class Overlay:
         self.running = True
         self._last_key: tuple | None = None
         self._last_state: ImeState | None = None
+        self._dpi_scale = 0.0   # 最後に反映したモニタの拡大率
 
         self.win = tk.Toplevel(root)
         self.win.overrideredirect(True)
@@ -71,8 +88,8 @@ class Overlay:
             font=self.font,
             bg=PALETTE["alnum"][0],
             fg=PALETTE["alnum"][1],
-            padx=6,
-            pady=1,
+            padx=PADDING_X,
+            pady=PADDING_Y,
             bd=0,
         )
         self.label.pack()
@@ -89,11 +106,28 @@ class Overlay:
 
     def apply_config(self) -> None:
         """管理画面で設定が変わったあとに呼ぶ。"""
-        self.font.configure(size=-self.config.font_size)
+        self._dpi_scale = 0.0  # 次の tick で文字サイズを作り直させる
         self.win.attributes("-alpha", self.config.alpha)
         self._last_key = None  # 次の tick で色と文字を貼り直させる
         if not self.config.badge_enabled:
             self.win.withdraw()
+
+    def _apply_scale(self, scale: float) -> None:
+        """バッジを出すモニタの拡大率に合わせて、文字と余白を作り直す。
+
+        このプロセスは Per-Monitor v2 なので Tk の 1 ピクセル = 物理ピクセル。
+        font_size をそのまま px で渡すと、200% のディスプレイでは半分の
+        大きさに見えてしまう。拡大率の違うモニタへ移しても揃うよう、
+        カーソルのあるモニタごとに測り直す。
+        """
+        if scale == self._dpi_scale:
+            return
+        self._dpi_scale = scale
+        self.font.configure(size=-max(1, round(self.config.font_size * scale)))
+        self.label.configure(
+            padx=round(PADDING_X * scale), pady=round(PADDING_Y * scale)
+        )
+        self.win.update_idletasks()
 
     # -- Win32 まわり ------------------------------------------------------
     def _hwnd(self) -> int:
@@ -139,15 +173,14 @@ class Overlay:
         self.root.after(self.config.interval_ms, self.tick)
 
     def _offsets(self) -> tuple[int, int]:
-        if not self.config.follow_cursor_size:
-            return self.config.offset_x, self.config.offset_y
-        ratio = max(1.0, cursor_pixel_size() / BASE_CURSOR_SIZE)
+        ratio = cursor_scale(self.config.follow_cursor_size)
         return round(self.config.offset_x * ratio), round(self.config.offset_y * ratio)
 
     def _move_to_cursor(self) -> None:
         pt = wintypes.POINT()
         if not user32.GetCursorPos(ctypes.byref(pt)):
             return
+        self._apply_scale(dpi_scale_at(pt.x, pt.y))
         w = self.win.winfo_width() or 1
         h = self.win.winfo_height() or 1
         off_x, off_y = self._offsets()

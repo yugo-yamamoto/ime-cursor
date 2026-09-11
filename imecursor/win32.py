@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ctypes
 import sys
+import time
 from ctypes import wintypes
 
 if sys.platform != "win32":  # pragma: no cover - Windows 専用
@@ -15,6 +16,10 @@ if sys.platform != "win32":  # pragma: no cover - Windows 専用
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 imm32 = ctypes.WinDLL("imm32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+try:  # Win8.1 以降。無い環境ではシステム全体の DPI で代用する
+    shcore = ctypes.WinDLL("shcore")
+except OSError:  # pragma: no cover - 環境依存
+    shcore = None
 
 # -- IME -------------------------------------------------------------------
 WM_IME_CONTROL = 0x0283
@@ -37,6 +42,13 @@ WS_EX_LAYERED = 0x00080000
 WS_EX_TRANSPARENT = 0x00000020
 WS_EX_NOACTIVATE = 0x08000000
 WS_EX_TOOLWINDOW = 0x00000080
+
+# -- DPI -------------------------------------------------------------------
+# このプロセスは Per-Monitor v2 なので、Tk の 1 ピクセル = 物理ピクセル。
+# 文字や余白を見た目のサイズで揃えるには、モニタの拡大率を掛ける必要がある
+BASE_DPI = 96
+MONITOR_DEFAULTTONEAREST = 2
+MDT_EFFECTIVE_DPI = 0
 
 # -- システムメトリクス ----------------------------------------------------
 SM_CXCURSOR = 13
@@ -98,11 +110,35 @@ ERROR_HOTKEY_ALREADY_REGISTERED = 1409
 # -- ウィンドウの表示と当たり判定 ------------------------------------------
 SW_HIDE = 0
 SW_SHOWNA = 8      # activate せずに表示する
+HWND_TOPMOST = -1
+SWP_NOACTIVATE = 0x0010
+SWP_SHOWWINDOW = 0x0040
 PM_NOREMOVE = 0x0000
 GA_ROOT = 2     # GetAncestor: トップレベルまで遡る
 
 # -- 単一インスタンス ------------------------------------------------------
 ERROR_ALREADY_EXISTS = 183
+
+# -- クリップボード --------------------------------------------------------
+# 変化の検知は GetClipboardSequenceNumber だけで足りる。セッションごとの DWORD
+# で、クリップボードが書き換わるたびに増える。クリップボードを開かないので
+# 他アプリのコピーを一切邪魔しない (OpenClipboard はロックを取ってしまう)。
+CF_TEXT = 1
+CF_BITMAP = 2
+CF_DIB = 8
+CF_UNICODETEXT = 13
+CF_HDROP = 15
+
+# パスワードマネージャなどが「監視するな」の意思表示として載せるフォーマット。
+# 名前で登録して IsClipboardFormatAvailable で有無だけ見る (開く必要はない)
+EXCLUSION_FORMAT_NAMES = (
+    "ExcludeClipboardContentFromMonitorProcessing",
+    "Clipboard Viewer Ignore",
+)
+
+# OpenClipboard は他アプリが開いている間は失敗する。待ちすぎると GUI が
+# 固まるので、ごく短く 1 回だけ待って諦める
+CLIPBOARD_RETRY_WAIT = 0.02
 
 
 class GUITHREADINFO(ctypes.Structure):
@@ -129,6 +165,8 @@ user32.GetGUIThreadInfo.restype = wintypes.BOOL
 user32.GetKeyboardLayout.argtypes = [wintypes.DWORD]
 user32.GetKeyboardLayout.restype = wintypes.HKL
 user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+user32.MonitorFromPoint.restype = wintypes.HANDLE
 user32.GetSystemMetrics.argtypes = [ctypes.c_int]
 user32.SendMessageTimeoutW.argtypes = [
     wintypes.HWND,
@@ -166,6 +204,11 @@ user32.DestroyCursor.restype = wintypes.BOOL
 user32.MessageBoxW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT]
 user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
 user32.ShowWindow.restype = wintypes.BOOL
+user32.SetWindowPos.argtypes = [
+    wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+    ctypes.c_int, ctypes.c_int, wintypes.UINT,
+]
+user32.SetWindowPos.restype = wintypes.BOOL
 
 user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
 user32.RegisterHotKey.restype = wintypes.BOOL
@@ -209,6 +252,24 @@ kernel32.GetFinalPathNameByHandleW.argtypes = [
 kernel32.GetFinalPathNameByHandleW.restype = wintypes.DWORD
 kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 
+user32.GetClipboardSequenceNumber.restype = wintypes.DWORD
+user32.IsClipboardFormatAvailable.argtypes = [wintypes.UINT]
+user32.IsClipboardFormatAvailable.restype = wintypes.BOOL
+user32.RegisterClipboardFormatW.argtypes = [wintypes.LPCWSTR]
+user32.RegisterClipboardFormatW.restype = wintypes.UINT
+user32.OpenClipboard.argtypes = [wintypes.HWND]
+user32.OpenClipboard.restype = wintypes.BOOL
+user32.GetClipboardData.argtypes = [wintypes.UINT]
+user32.GetClipboardData.restype = wintypes.HANDLE
+user32.CloseClipboard.restype = wintypes.BOOL
+
+kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+kernel32.GlobalLock.restype = ctypes.c_void_p
+kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+kernel32.GlobalUnlock.restype = wintypes.BOOL
+kernel32.GlobalSize.argtypes = [wintypes.HGLOBAL]
+kernel32.GlobalSize.restype = ctypes.c_size_t
+
 FILE_SHARE_READ_WRITE = 0x00000003
 OPEN_EXISTING = 3
 FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
@@ -221,6 +282,28 @@ GetWindowLong.argtypes = [wintypes.HWND, ctypes.c_int]
 GetWindowLong.restype = ctypes.c_ssize_t
 SetWindowLong.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
 SetWindowLong.restype = ctypes.c_ssize_t
+
+
+def dpi_scale_at(x: int, y: int) -> float:
+    """その座標のあるモニタの拡大率 (96dpi = 1.0、200% なら 2.0)。
+
+    マルチモニタで拡大率が違う場合に備えて、システム全体ではなくモニタ単位で
+    問い合わせる。取れない環境ではシステム全体の DPI、それも駄目なら 1.0。
+    """
+    if shcore is not None:
+        monitor = user32.MonitorFromPoint(
+            wintypes.POINT(int(x), int(y)), MONITOR_DEFAULTTONEAREST
+        )
+        dpi_x = wintypes.UINT()
+        dpi_y = wintypes.UINT()
+        if monitor and shcore.GetDpiForMonitor(
+            monitor, MDT_EFFECTIVE_DPI, ctypes.byref(dpi_x), ctypes.byref(dpi_y)
+        ) == 0:
+            return (dpi_x.value or BASE_DPI) / BASE_DPI
+    try:
+        return (int(user32.GetDpiForSystem()) or BASE_DPI) / BASE_DPI
+    except AttributeError:  # pragma: no cover - Win8 以前
+        return 1.0
 
 
 def enable_dpi_awareness() -> None:
@@ -319,6 +402,20 @@ def show_window_no_activate(hwnd: int) -> None:
     user32.ShowWindow(hwnd, SW_SHOWNA)
 
 
+def place_window_no_activate(hwnd: int, x: int, y: int, width: int, height: int) -> None:
+    """位置と大きさを決めて、最前面に、活性化せずに表示する。
+
+    Tk の geometry() は withdraw 中のウィンドウには効かない (マップする
+    ときにまとめて適用される)。SW_SHOWNA で直接出すとマップを経由しない
+    ため、Tk に頼ると左上 (0, 0) に出てしまう (実測)。位置・大きさ・
+    Z オーダー・表示を SetWindowPos 1 回で済ませる。
+    """
+    user32.SetWindowPos(
+        hwnd, wintypes.HWND(HWND_TOPMOST), int(x), int(y), int(width), int(height),
+        SWP_NOACTIVATE | SWP_SHOWWINDOW,
+    )
+
+
 def hide_window(hwnd: int) -> None:
     user32.ShowWindow(hwnd, SW_HIDE)
 
@@ -390,6 +487,80 @@ def real_path(path: str) -> str:
     if resolved.startswith("\\\\?\\"):
         return resolved[4:]
     return resolved
+
+
+def clipboard_sequence() -> int:
+    """クリップボードが書き換わるたびに増える番号。
+
+    クリップボードを開かないので、他アプリのコピーと競合しない。折り返しが
+    あるので、大小ではなく「前回と違うか」だけを見ること。
+    """
+    return int(user32.GetClipboardSequenceNumber())
+
+
+def clipboard_kind() -> str:
+    """いま入っているものの種類。"text" / "image" / "files" / "other"。
+
+    IsClipboardFormatAvailable はクリップボードを開かずに答えられる。
+    ファイル → 画像 → テキストの順に見る (エクスプローラのファイルコピーや
+    画像のコピーには、説明用のテキストが一緒に載っていることがあるため)。
+    """
+    if user32.IsClipboardFormatAvailable(CF_HDROP):
+        return "files"
+    if user32.IsClipboardFormatAvailable(CF_BITMAP) or user32.IsClipboardFormatAvailable(CF_DIB):
+        return "image"
+    if user32.IsClipboardFormatAvailable(CF_UNICODETEXT) or user32.IsClipboardFormatAvailable(CF_TEXT):
+        return "text"
+    return "other"
+
+
+_exclusion_formats: list[int] = []
+
+
+def clipboard_excluded() -> bool:
+    """「中身を覗くな」の印が付いているか (パスワードマネージャなど)。"""
+    if not _exclusion_formats:
+        for name in EXCLUSION_FORMAT_NAMES:
+            fmt = int(user32.RegisterClipboardFormatW(name))
+            if fmt:
+                _exclusion_formats.append(fmt)
+    return any(user32.IsClipboardFormatAvailable(fmt) for fmt in _exclusion_formats)
+
+
+def _open_clipboard() -> bool:
+    """他アプリが開いている場合に備えて 1 回だけ待ち直す。"""
+    if user32.OpenClipboard(None):
+        return True
+    time.sleep(CLIPBOARD_RETRY_WAIT)
+    return bool(user32.OpenClipboard(None))
+
+
+def clipboard_text_head(limit: int) -> str | None:
+    """テキストの先頭 limit 文字だけを読む。読めなければ None。
+
+    全体を読まないのは、数 MB のコピーでも一定の速さで済ませるため。
+    開いている間は他アプリがクリップボードを触れないので、必ず閉じる。
+    """
+    if limit <= 0 or not _open_clipboard():
+        return None
+    try:
+        handle = user32.GetClipboardData(CF_UNICODETEXT)
+        if not handle:
+            return None
+        pointer = kernel32.GlobalLock(handle)
+        if not pointer:
+            return None
+        try:
+            available = int(kernel32.GlobalSize(handle)) // ctypes.sizeof(ctypes.c_wchar)
+            count = min(limit, max(available, 0))
+            if count <= 0:
+                return ""
+            text = ctypes.wstring_at(pointer, count)
+        finally:
+            kernel32.GlobalUnlock(handle)
+    finally:
+        user32.CloseClipboard()
+    return text.split("\x00", 1)[0]  # 終端の NUL より先は読まない
 
 
 def acquire_single_instance(name: str) -> bool:

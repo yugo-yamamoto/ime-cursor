@@ -45,6 +45,7 @@ from .win32 import (
     WS_EX_TOOLWINDOW,
     WS_EX_TRANSPARENT,
     add_ex_style,
+    dpi_scale_at,
     foreground_window,
     hide_window,
     restore_foreground,
@@ -66,6 +67,12 @@ MIN_DRAG = 4
 # Canvas のタグ。clear() で消すのは枠だけ
 TAG_SHAPE = "shape"
 TAG_UI = "ui"
+
+# 左上の操作説明。いずれも 96dpi での px で、モニタの拡大率を掛けて使う
+INDICATOR_FONT_SIZE = 20
+INDICATOR_MARGIN = 24
+INDICATOR_PAD = 10
+INDICATOR_BORDER = 2
 
 
 class Marker:
@@ -284,8 +291,9 @@ class Marker:
         # 右クリックは緊急脱出。固まったときにクリックを食い続けないため
         self.catcher.bind("<ButtonPress-3>", lambda _e: self.escape())
 
-        # 日本語が出るフォントを選ぶ。欧文フォントにフォールバックさせない
-        self.font = tkfont.Font(family=pick_font_family(), size=-20, weight="bold")
+        # 日本語が出るフォントを選ぶ。欧文フォントにフォールバックさせない。
+        # 大きさは _draw_indicator でモニタの拡大率に合わせて入れる
+        self.font = tkfont.Font(family=pick_font_family(), weight="bold")
 
     def _apply_geometry(self) -> None:
         """仮想スクリーン全体を覆う。
@@ -370,9 +378,17 @@ class Marker:
         if not self.config.marker_show_indicator:
             return
         text = f"マーカー ON   ドラッグ=枠   Esc=消して終了   {self.hotkey_label()}=終了"
-        pad = 10
+        # 説明を出す左上の位置で、そのモニタの拡大率を測る。Per-Monitor v2 の
+        # プロセスでは Tk の 1 ピクセル = 物理ピクセルなので、px 指定のままだと
+        # 200% のディスプレイで半分の大きさに見えてしまう
+        scale = dpi_scale_at(
+            self._offset[0] + INDICATOR_MARGIN, self._offset[1] + INDICATOR_MARGIN
+        )
+        self.font.configure(size=-max(1, round(INDICATOR_FONT_SIZE * scale)))
+        pad = round(INDICATOR_PAD * scale)
+        margin = round(INDICATOR_MARGIN * scale)
         item = self.canvas.create_text(
-            24 + pad, 24 + pad, text=text, anchor="nw",
+            margin + pad, margin + pad, text=text, anchor="nw",
             fill="#ffffff", font=self.font, tags=TAG_UI,
         )
         x0, y0, x1, y1 = self.canvas.bbox(item)
@@ -380,7 +396,8 @@ class Marker:
         # 寄って欠ける。不透明な下地を敷いてからその上に乗せる
         box = self.canvas.create_rectangle(
             x0 - pad, y0 - pad, x1 + pad, y1 + pad,
-            fill="#202020", outline=self.config.marker_color, width=2, tags=TAG_UI,
+            fill="#202020", outline=self.config.marker_color,
+            width=round(INDICATOR_BORDER * scale), tags=TAG_UI,
         )
         self.canvas.tag_raise(item, box)
 

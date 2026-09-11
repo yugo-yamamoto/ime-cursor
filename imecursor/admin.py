@@ -1,6 +1,7 @@
 """管理画面 (tkinter)。
 
 - IME モード表示のオン / オフ
+- コピー通知のオン / オフ
 - マウスカーソルの色
 - マウスカーソルのサイズ
 
@@ -28,6 +29,7 @@ from .config import (
     config_path,
     contrast_fg,
 )
+from .clipnotice import ClipboardNotice
 from .marker import Marker
 from .overlay import Overlay, pick_font_family
 from .win32 import cursor_pixel_size
@@ -56,11 +58,12 @@ class AdminWindow:
     """常駐プロセスに 1 つだけ存在する管理画面。閉じても常駐は続く。"""
 
     def __init__(self, root: tk.Tk, config: Config, overlay: Overlay,
-                 marker: Marker, on_quit) -> None:
+                 marker: Marker, clipnotice: ClipboardNotice, on_quit) -> None:
         self.root = root
         self.config = config
         self.overlay = overlay
         self.marker = marker
+        self.clipnotice = clipnotice
         self.on_quit = on_quit
         self._suppress = True  # 初期化中の trace で適用処理を走らせない
 
@@ -104,6 +107,7 @@ class AdminWindow:
         outer.pack(fill="both", expand=True)
 
         self._build_badge_section(outer)
+        self._build_clip_section(outer)
         self._build_marker_section(outer)
         self._build_color_section(outer)
         self._build_size_section(outer)
@@ -168,6 +172,37 @@ class AdminWindow:
         self._spinbox(size_row, self.var_alpha, self._on_badge_option,
                       from_=10, to=100, increment=5, width=5).pack(side="left", padx=(0, 2))
         ttk.Label(size_row, text="%").pack(side="left")
+
+    # -- コピー通知 --------------------------------------------------------
+    def _build_clip_section(self, parent: ttk.Frame) -> None:
+        box = self._section(parent, "コピー通知")
+
+        self.var_clip_enabled = tk.BooleanVar(value=self.config.clip_notice_enabled)
+        self.var_clip_preview = tk.BooleanVar(value=self.config.clip_notice_preview)
+        ttk.Checkbutton(box, text="クリップボードにコピーしたら、カーソルの近くに知らせる",
+                        variable=self.var_clip_enabled,
+                        command=self._on_clip_option).pack(anchor="w")
+        ttk.Checkbutton(box, text="コピーした内容の先頭も出す",
+                        variable=self.var_clip_preview,
+                        command=self._on_clip_option).pack(anchor="w", pady=(6, 0))
+
+        row = ttk.Frame(box)
+        row.pack(fill="x", pady=(8, 0))
+        ttk.Label(row, text="表示時間").pack(side="left")
+        self.var_clip_ms = tk.IntVar(value=self.config.clip_notice_ms)
+        self._spinbox(row, self.var_clip_ms, self._on_clip_option,
+                      from_=300, to=10000, increment=100,
+                      width=7).pack(side="left", padx=(6, 2))
+        ttk.Label(row, text="ミリ秒").pack(side="left")
+
+        ttk.Label(row, text="文字サイズ").pack(side="left", padx=(16, 0))
+        self.var_clip_font = tk.IntVar(value=self.config.clip_font_size)
+        self._spinbox(row, self.var_clip_font, self._on_clip_option,
+                      from_=8, to=72, width=5).pack(side="left", padx=(6, 2))
+        ttk.Label(row, text="px").pack(side="left")
+
+        ttk.Button(row, text="テスト表示",
+                   command=self.test_clip_notice).pack(side="left", padx=(16, 0))
 
     # -- プレゼン用マーカー ------------------------------------------------
     def _build_marker_section(self, parent: ttk.Frame) -> None:
@@ -293,6 +328,8 @@ class AdminWindow:
 
     def copy_log(self) -> None:
         text = self.log_text.get("1.0", "end-1c")
+        # 自分の書き込みでコピー通知が出ると、管理画面の上にトーストが重なる
+        self.clipnotice.mute()
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
         self.copy_hint.configure(text=f"{len(text.splitlines())} 行コピーしました")
@@ -334,6 +371,34 @@ class AdminWindow:
             f"説明={self.config.verbose} 文字={self.config.font_size}px "
             f"不透明度={round(self.config.alpha * 100)}%"
         )
+
+    # -- コピー通知 --------------------------------------------------------
+    def _on_clip_option(self) -> None:
+        if self._suppress:
+            return
+        self.config.clip_notice_enabled = bool(self.var_clip_enabled.get())
+        self.config.clip_notice_preview = bool(self.var_clip_preview.get())
+        try:
+            self.config.clip_notice_ms = int(self.var_clip_ms.get())
+            self.config.clip_font_size = int(self.var_clip_font.get())
+        except (tk.TclError, ValueError):
+            pass
+        self.config.clamp()
+        # 丸められた場合に、欄の表示を実際に効いた値へそろえる
+        self.var_clip_ms.set(self.config.clip_notice_ms)
+        self.var_clip_font.set(self.config.clip_font_size)
+        self.clipnotice.apply_config()
+        self._save()
+        self.log(
+            f"コピー通知: {'あり' if self.config.clip_notice_enabled else 'なし'} / "
+            f"内容の先頭 {'あり' if self.config.clip_notice_preview else 'なし'} / "
+            f"表示 {self.config.clip_notice_ms} ミリ秒 / "
+            f"文字 {self.config.clip_font_size}px"
+        )
+
+    def test_clip_notice(self) -> None:
+        self.clipnotice.show_test()
+        self.log("コピー通知をテスト表示しました（マウスカーソルの近くに出ます）")
 
     # -- マーカー ----------------------------------------------------------
     def toggle_marker(self) -> None:
@@ -446,6 +511,15 @@ class AdminWindow:
             bg="#2e7d32" if on else "#9e9e9e",
             fg="#ffffff",
         )
+
+        if bool(self.var_clip_enabled.get()) != self.config.clip_notice_enabled:
+            self.var_clip_enabled.set(self.config.clip_notice_enabled)
+        if bool(self.var_clip_preview.get()) != self.config.clip_notice_preview:
+            self.var_clip_preview.set(self.config.clip_notice_preview)
+        if int(self.var_clip_ms.get() or 0) != self.config.clip_notice_ms:
+            self.var_clip_ms.set(self.config.clip_notice_ms)
+        if int(self.var_clip_font.get() or 0) != self.config.clip_font_size:
+            self.var_clip_font.set(self.config.clip_font_size)
 
         marker_on = self.marker.active
         self.marker_button.configure(

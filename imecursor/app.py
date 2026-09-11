@@ -95,6 +95,7 @@ def run_gui(show_admin: bool) -> int:
         return 1
 
     from .admin import AdminWindow
+    from .clipnotice import ClipboardNotice
     from .marker import Marker
     from .overlay import Overlay
 
@@ -105,10 +106,13 @@ def run_gui(show_admin: bool) -> int:
 
     overlay = Overlay(root, cfg)
     marker = Marker(root, cfg)
+    notice = ClipboardNotice(root, cfg)
     admin = AdminWindow(
-        root, cfg, overlay, marker, on_quit=lambda: _quit(root, overlay, marker)
+        root, cfg, overlay, marker, notice,
+        on_quit=lambda: _quit(root, overlay, marker, notice),
     )
     marker.log = admin.log      # 管理画面ができてからログの行き先を差し替える
+    notice.log = admin.log
     marker.start_hotkey()       # 登録に失敗してもログに出すだけで常駐は続ける
 
     if show_admin:
@@ -133,19 +137,21 @@ def run_gui(show_admin: bool) -> int:
         root.after(FLAG_POLL_MS, poll_flag)
 
     root.after(FLAG_POLL_MS, poll_flag)
-    root.protocol("WM_DELETE_WINDOW", lambda: _quit(root, overlay, marker))
+    root.protocol("WM_DELETE_WINDOW", lambda: _quit(root, overlay, marker, notice))
 
     try:
         root.mainloop()
     except KeyboardInterrupt:
-        _quit(root, overlay, marker)
+        _quit(root, overlay, marker, notice)
     return 0
 
 
-def _quit(root, overlay, marker=None) -> None:
+def _quit(root, overlay, marker=None, notice=None) -> None:
     # マーカーを先に畳む。ホットキーの解除とスレッドの終了を待つ必要がある
     if marker is not None:
         marker.stop()
+    if notice is not None:
+        notice.stop()
     overlay.stop()
     try:
         root.destroy()
