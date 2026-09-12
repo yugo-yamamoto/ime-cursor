@@ -71,6 +71,7 @@ class Overlay:
         self._last_key: tuple | None = None
         self._last_state: ImeState | None = None
         self._dpi_scale = 0.0   # 最後に反映したモニタの拡大率
+        self._last_pos: tuple[int, int] | None = None  # 最後に置いた位置
 
         self.win = tk.Toplevel(root)
         self.win.overrideredirect(True)
@@ -109,6 +110,7 @@ class Overlay:
         self._dpi_scale = 0.0  # 次の tick で文字サイズを作り直させる
         self.win.attributes("-alpha", self.config.alpha)
         self._last_key = None  # 次の tick で色と文字を貼り直させる
+        self._last_pos = None  # オフセットや文字サイズが変わると位置も変わる
         if not self.config.badge_enabled:
             self.win.withdraw()
 
@@ -188,7 +190,17 @@ class Overlay:
         vx, vy, vw, vh = virtual_screen()
         x = min(max(pt.x + off_x, vx), vx + vw - w)
         y = min(max(pt.y + off_y, vy), vy + vh - h)
-        self.win.geometry(f"+{int(x)}+{int(y)}")
+
+        # 同じ場所に置き直すだけでも、半透明 (WS_EX_LAYERED) の最前面ウィンドウは
+        # DWM の再合成が走って CPU を食う (実測で 1 回 0.8ms、動かすと 1.9ms)。
+        # キーボード入力中はカーソルが止まっているので、そのぶんを丸ごと省く。
+        # 比べるのはクランプしたあとの座標。こうするとバッジの幅が変わって
+        # 画面端での位置が変わったときも、ちゃんと置き直せる
+        pos = (int(x), int(y))
+        if pos == self._last_pos:
+            return
+        self._last_pos = pos
+        self.win.geometry(f"+{pos[0]}+{pos[1]}")
 
     def stop(self) -> None:
         self.running = False

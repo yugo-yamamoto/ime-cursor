@@ -277,7 +277,7 @@ tkinter のトップレベルウィンドウに、`SetWindowLongPtrW` で以下�
 | `WS_EX_NOACTIVATE` | クリックされてもフォーカスを奪わない |
 | `WS_EX_TOOLWINDOW` | Alt+Tab とタスクバーに出さない |
 
-`interval_ms` ごとに `GetCursorPos` を読み、`GetSystemMetrics(SM_*VIRTUALSCREEN)` で仮想デスクトップの範囲にクランプしてから移動します。カーソルを大きくしているときはバッジがカーソルの下に隠れるため、`follow_cursor_size` が有効ならオフセットも比例して広げます。
+`interval_ms` ごとに `GetCursorPos` を読み、`GetSystemMetrics(SM_*VIRTUALSCREEN)` で仮想デスクトップの範囲にクランプしてから移動します。**置く場所が前回と同じなら、ウィンドウは動かしません。** 半透明（`WS_EX_LAYERED`）の最前面ウィンドウは、同じ位置に置き直すだけでも DWM の再合成が走り、実測で 1 回 0.8ms（移動なら 1.9ms）かかります。33 回/秒で払い続けると効くため、キーボード入力中（カーソルが止まっている間）はこれを丸ごと省いています。カーソルを大きくしているときはバッジがカーソルの下に隠れるため、`follow_cursor_size` が有効ならオフセットも比例して広げます。
 
 文字の大きさは、そのときカーソルがあるモニタの拡大率（`MonitorFromPoint` + `GetDpiForMonitor`）を掛けて決めます。Per-Monitor v2 のプロセスでは Tk の 1 ピクセルが物理ピクセルなので、`font_size` をそのまま px で渡すと 200% のディスプレイでは半分の大きさに見えてしまうためです。**設定値は 96dpi 換算**で、拡大率の違うモニタへカーソルを移すとその場で測り直します。バッジ・マーカーの操作説明・コピー通知のすべてが同じ扱いです。
 
