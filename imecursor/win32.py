@@ -102,8 +102,21 @@ MOD_SHIFT = 0x0004
 MOD_WIN = 0x0008
 MOD_NOREPEAT = 0x4000  # 押しっぱなしで連射させない
 
+VK_RETURN = 0x0D
 VK_ESCAPE = 0x1B
 VK_SPACE = 0x20
+VK_RIGHT = 0x27
+VK_DOWN = 0x28
+
+# -- 低レベルキーボードフック ----------------------------------------------
+# RegisterHotKey はキーを奪ってしまう (下のアプリに届かない)。スライド送りの
+# キーは「押されたことを知りたいが、下のアプリにもそのまま渡したい」ので、
+# WH_KEYBOARD_LL で覗くだけにする。フックはメッセージループを回している
+# スレッドで入れる必要がある (hotkey.py のスレッドで入れている)
+WH_KEYBOARD_LL = 13
+HC_ACTION = 0
+WM_KEYDOWN = 0x0100
+WM_SYSKEYDOWN = 0x0104
 
 ERROR_HOTKEY_ALREADY_REGISTERED = 1409
 
@@ -139,6 +152,21 @@ EXCLUSION_FORMAT_NAMES = (
 # OpenClipboard は他アプリが開いている間は失敗する。待ちすぎると GUI が
 # 固まるので、ごく短く 1 回だけ待って諦める
 CLIPBOARD_RETRY_WAIT = 0.02
+
+
+class KBDLLHOOKSTRUCT(ctypes.Structure):
+    _fields_ = [
+        ("vkCode", wintypes.DWORD),
+        ("scanCode", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
+
+LowLevelKeyboardProc = ctypes.WINFUNCTYPE(
+    ctypes.c_ssize_t, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
+)
 
 
 class GUITHREADINFO(ctypes.Structure):
@@ -226,6 +254,18 @@ user32.PeekMessageW.argtypes = [
     ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT, wintypes.UINT
 ]
 user32.PeekMessageW.restype = wintypes.BOOL
+user32.SetWindowsHookExW.argtypes = [
+    ctypes.c_int, LowLevelKeyboardProc, wintypes.HINSTANCE, wintypes.DWORD
+]
+user32.SetWindowsHookExW.restype = wintypes.HHOOK
+user32.UnhookWindowsHookEx.argtypes = [wintypes.HHOOK]
+user32.UnhookWindowsHookEx.restype = wintypes.BOOL
+user32.CallNextHookEx.argtypes = [
+    wintypes.HHOOK, ctypes.c_int, wintypes.WPARAM, wintypes.LPARAM
+]
+user32.CallNextHookEx.restype = ctypes.c_ssize_t
+kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+kernel32.GetModuleHandleW.restype = wintypes.HMODULE
 
 user32.GetForegroundWindow.restype = wintypes.HWND
 user32.SetForegroundWindow.argtypes = [wintypes.HWND]

@@ -11,6 +11,11 @@
 
 登録・解除の指示も、`GetMessageW` がブロックしていてキューを覗けないので
 `PostThreadMessageW` でスレッドへ送る。
+
+`RegisterHotKey` は押されたキーを奪う (下のアプリに届かない)。「押されたことは
+知りたいが、キーは下のアプリにもそのまま渡したい」もの (マーカー中のスライド
+送り) は `watch_keys` で低レベルキーボードフックを入れて覗く。フックも
+メッセージループを回すスレッドで入れる必要があるので、同じスレッドに置く。
 """
 
 from __future__ import annotations
@@ -22,6 +27,8 @@ from tkinter import TclError as tk_error
 
 from .win32 import (
     ERROR_HOTKEY_ALREADY_REGISTERED,
+    HC_ACTION,
+    KBDLLHOOKSTRUCT,
     MOD_ALT,
     MOD_CONTROL,
     MOD_NOREPEAT,
@@ -30,9 +37,13 @@ from .win32 import (
     PM_NOREMOVE,
     VK_ESCAPE,
     VK_SPACE,
+    WH_KEYBOARD_LL,
     WM_APP,
     WM_HOTKEY,
+    WM_KEYDOWN,
     WM_QUIT,
+    WM_SYSKEYDOWN,
+    LowLevelKeyboardProc,
     kernel32,
     user32,
 )
@@ -42,6 +53,8 @@ from ctypes import wintypes
 # スレッドへ送る指示 (PostThreadMessageW の uMsg)
 _MSG_REGISTER = WM_APP + 1
 _MSG_UNREGISTER = WM_APP + 2
+_MSG_HOOK = WM_APP + 3      # キーボードフックを入れる
+_MSG_UNHOOK = WM_APP + 4    # キーボードフックを外す
 
 # 押されたホットキーを Tk 側へ吸い出す間隔 (ミリ秒)
 POLL_INTERVAL_MS = 40
@@ -119,6 +132,9 @@ class HotkeyListener:
         self._pumping = False                # Tk 側のポーリングを続けるか
         self._root = None                    # ポーリングを張っている Tk のルート
         self._after_id: str | None = None    # 入れてある after の予約
+        # watch_keys: 覗いているキー (仮想キーコード -> 名前)。フックの
+        # コールバック (待ち受けスレッド) から読むので、差し替えは丸ごと代入で
+        self._watched: dict[int, str] = {}
 
     # ---------------------------------------------------------------- 起動
     def start(self) -> bool:
@@ -159,6 +175,22 @@ class HotkeyListener:
         hotkey_id = self._ids.get(name)
         if hotkey_id is not None:
             self._post(_MSG_UNREGISTER, hotkey_id, 0)
+
+    def watch_keys(self, keys: dict[int, str]) -> None:
+        """キーを奪わずに覗く。{仮想キーコード: 名前} を渡す。
+
+        押されると名前が on_hotkey へ届く。キーは下のアプリにもそのまま渡る。
+        失敗しても例外は投げない。error_for(名前) に理由が入る。
+        """
+        for name in set(keys.values()):
+            self._errors.pop(name, None)
+        self._watched = dict(keys)
+        self._post(_MSG_HOOK, 0, 0)
+
+    def unwatch_keys(self) -> None:
+        # 先に空にしておけば、フックが外れるまでの間に押されても何も届かない
+        self._watched = {}
+        self._post(_MSG_UNHOOK, 0, 0)
 
     def _post(self, message: int, wparam: int, lparam: int) -> bool:
         if not self._thread_id:
@@ -219,6 +251,21 @@ class HotkeyListener:
     def _run(self) -> None:
         self._thread_id = int(kernel32.GetCurrentThreadId())
         registered: dict[int, str] = {}
+        hook = None
+
+        def on_key(code: int, wparam: int, lparam: int) -> int:
+            # ここで時間をかけると全アプリのキー入力が詰まるので、名前を
+            # キューに積むだけにする。戻り値は必ず CallNextHookEx に任せる
+            # (キーを下のアプリへ渡す)
+            if code == HC_ACTION and wparam in (WM_KEYDOWN, WM_SYSKEYDOWN):
+                info = ctypes.cast(lparam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                name = self._watched.get(int(info.vkCode))
+                if name:
+                    self._queue.put(name)
+            return user32.CallNextHookEx(None, code, wparam, lparam)
+
+        # コールバックは参照を握っておかないと GC されて落ちる
+        hook_proc = LowLevelKeyboardProc(on_key)
 
         # PeekMessage を 1 回呼んでスレッドのメッセージキューを作らせる。
         # キューができる前に PostThreadMessageW が来ると取りこぼす
@@ -258,8 +305,25 @@ class HotkeyListener:
                 user32.UnregisterHotKey(None, hotkey_id)
                 registered.pop(hotkey_id, None)
 
+            elif message.message == _MSG_HOOK:
+                if not hook:
+                    hook = user32.SetWindowsHookExW(
+                        WH_KEYBOARD_LL, hook_proc, kernel32.GetModuleHandleW(None), 0
+                    )
+                    if not hook:
+                        code = ctypes.get_last_error()
+                        for name in set(self._watched.values()):
+                            self._errors[name] = f"キーの監視に失敗しました (エラー {code})"
+
+            elif message.message == _MSG_UNHOOK:
+                if hook:
+                    user32.UnhookWindowsHookEx(hook)
+                    hook = None
+
         for hotkey_id in list(registered):
             user32.UnregisterHotKey(None, hotkey_id)
+        if hook:
+            user32.UnhookWindowsHookEx(hook)
         self._thread_id = 0
 
     def _name_for(self, hotkey_id: int) -> str:

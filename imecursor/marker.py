@@ -21,6 +21,11 @@
 Escape は Tk のバインドでは受け取れないので、モード中だけグローバルホットキー
 として登録し、抜けるときに解除する。
 
+右矢印・下矢印・Enter でもマーカーを消して抜ける。ただしこちらはスライド送りの
+キーなので、ホットキーとして奪わず低レベルキーボードフックで覗くだけにする
+(下のアプリにもキーが届き、スライドが進むと同時に枠が消える)。Escape だけを
+奪うのは、PowerPoint のスライドショーが Escape で終わってしまうのを防ぐため。
+
 Tk の deiconify() は内部で ShowWindow(SW_RESTORE) を呼ぶため、
 WS_EX_NOACTIVATE を付けていても表示の瞬間だけフォアグラウンドを奪ってしまう
 (実測)。表示直後に元のウィンドウへ返している。
@@ -40,6 +45,9 @@ from .config import (
 )
 from .overlay import pick_font_family
 from .win32 import (
+    VK_DOWN,
+    VK_RETURN,
+    VK_RIGHT,
     WS_EX_LAYERED,
     WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW,
@@ -57,6 +65,14 @@ from .win32 import (
 # ホットキーの名前
 HOTKEY_TOGGLE = "marker_toggle"
 HOTKEY_ESCAPE = "marker_escape"
+HOTKEY_ADVANCE = "marker_advance"   # スライド送りのキー (奪わずに覗く)
+
+# モード中に覗くスライド送りのキー。押されたらマーカーを消して抜ける
+ADVANCE_KEYS = {VK_RIGHT: HOTKEY_ADVANCE, VK_DOWN: HOTKEY_ADVANCE, VK_RETURN: HOTKEY_ADVANCE}
+ADVANCE_KEYS_LABEL = "→・↓・Enter"
+
+# キー監視の結果 (非同期) を確かめるまでの待ち時間 (ミリ秒)
+WATCH_CHECK_DELAY_MS = 300
 
 # 画面構成の変化 (プレゼン直前にプロジェクタが挿される) を見張る間隔
 WATCH_INTERVAL_MS = 1000
@@ -144,11 +160,27 @@ class Marker:
             return False
         return True
 
+    def _watch_advance_keys(self) -> None:
+        """モード中だけスライド送りのキーを覗く。キーは下のアプリにも渡る。"""
+        if not self._hotkeys.alive:
+            self.log(f"警告: {ADVANCE_KEYS_LABEL} を監視できません。Esc で抜けてください")
+            return
+        self._hotkeys.watch_keys(ADVANCE_KEYS)
+
+        def check() -> None:
+            error = self._hotkeys.error_for(HOTKEY_ADVANCE)
+            if self.active and error:
+                self.log(f"警告: {ADVANCE_KEYS_LABEL} の監視: {error}。Esc で抜けてください")
+
+        self.root.after(WATCH_CHECK_DELAY_MS, check)
+
     def _on_hotkey(self, name: str) -> None:
         if name == HOTKEY_TOGGLE:
             self.toggle()
-        elif name == HOTKEY_ESCAPE:
-            self.escape()
+        elif name in (HOTKEY_ESCAPE, HOTKEY_ADVANCE):
+            # キーリピートで抜けた後にも届くことがあるので、モード中だけ扱う
+            if self.active:
+                self.escape()
 
     # ================================================================ 状態
     def shape_count(self) -> int:
@@ -161,7 +193,7 @@ class Marker:
         self.deactivate() if self.active else self.activate()
 
     def escape(self) -> None:
-        """Escape の挙動: 枠を全部消して、モードも終了する。"""
+        """Escape (と →・↓・Enter) の挙動: 枠を全部消して、モードも終了する。"""
         removed = self.shape_count()
         self.deactivate()
         self.log(f"マーカーを終了しました（枠 {removed} 個を消去）")
@@ -209,14 +241,16 @@ class Marker:
         if not self._register_escape():
             self.log("警告: Escape を登録できませんでした。"
                      "右クリックか管理画面の「マーカーを停止」で抜けてください")
+        self._watch_advance_keys()
         self._watch()
-        self.log("マーカーを開始しました（ドラッグで枠、Esc で消去して終了）")
+        self.log(f"マーカーを開始しました（ドラッグで枠、Esc・{ADVANCE_KEYS_LABEL} で消去して終了）")
 
     def deactivate(self) -> None:
         if not self.active:
             return
         self.active = False
         self._hotkeys.unregister(HOTKEY_ESCAPE)
+        self._hotkeys.unwatch_keys()
         if self._watch_id is not None:
             self.root.after_cancel(self._watch_id)
             self._watch_id = None
@@ -377,7 +411,7 @@ class Marker:
         self.canvas.delete(TAG_UI)
         if not self.config.marker_show_indicator:
             return
-        text = f"マーカー ON   ドラッグ=枠   Esc=消して終了   {self.hotkey_label()}=終了"
+        text = f"マーカー ON   ドラッグ=枠   Esc・{ADVANCE_KEYS_LABEL}=消して終了   {self.hotkey_label()}=終了"
         # 説明を出す左上の位置で、そのモニタの拡大率を測る。Per-Monitor v2 の
         # プロセスでは Tk の 1 ピクセル = 物理ピクセルなので、px 指定のままだと
         # 200% のディスプレイで半分の大きさに見えてしまう
