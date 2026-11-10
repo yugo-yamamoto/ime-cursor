@@ -21,7 +21,7 @@
 Escape は Tk のバインドでは受け取れないので、モード中だけグローバルホットキー
 として登録し、抜けるときに解除する。
 
-右矢印・下矢印・Enter でもマーカーを消して抜ける。ただしこちらはスライド送りの
+矢印キー・PageUp・PageDown・Enter でもマーカーを消して抜ける。ただしこちらはスライド送りの
 キーなので、ホットキーとして奪わず低レベルキーボードフックで覗くだけにする
 (下のアプリにもキーが届き、スライドが進むと同時に枠が消える)。Escape だけを
 奪うのは、PowerPoint のスライドショーが Escape で終わってしまうのを防ぐため。
@@ -46,8 +46,12 @@ from .config import (
 from .overlay import pick_font_family
 from .win32 import (
     VK_DOWN,
+    VK_LEFT,
+    VK_NEXT,
+    VK_PRIOR,
     VK_RETURN,
     VK_RIGHT,
+    VK_UP,
     WS_EX_LAYERED,
     WS_EX_NOACTIVATE,
     WS_EX_TOOLWINDOW,
@@ -67,9 +71,12 @@ HOTKEY_TOGGLE = "marker_toggle"
 HOTKEY_ESCAPE = "marker_escape"
 HOTKEY_ADVANCE = "marker_advance"   # スライド送りのキー (奪わずに覗く)
 
-# モード中に覗くスライド送りのキー。押されたらマーカーを消して抜ける
-ADVANCE_KEYS = {VK_RIGHT: HOTKEY_ADVANCE, VK_DOWN: HOTKEY_ADVANCE, VK_RETURN: HOTKEY_ADVANCE}
-ADVANCE_KEYS_LABEL = "→・↓・Enter"
+# モード中に覗くスライド送り (戻し) のキー。押されたらマーカーを消して抜ける
+ADVANCE_KEYS = {
+    vk: HOTKEY_ADVANCE
+    for vk in (VK_RIGHT, VK_DOWN, VK_LEFT, VK_UP, VK_NEXT, VK_PRIOR, VK_RETURN)
+}
+ADVANCE_KEYS_LABEL = "矢印・PgUp・PgDn・Enter"
 
 # キー監視の結果 (非同期) を確かめるまでの待ち時間 (ミリ秒)
 WATCH_CHECK_DELAY_MS = 300
@@ -193,7 +200,7 @@ class Marker:
         self.deactivate() if self.active else self.activate()
 
     def escape(self) -> None:
-        """Escape (と →・↓・Enter) の挙動: 枠を全部消して、モードも終了する。"""
+        """Escape (とスライド送りのキー) の挙動: 枠を全部消して、モードも終了する。"""
         removed = self.shape_count()
         self.deactivate()
         self.log(f"マーカーを終了しました（枠 {removed} 個を消去）")

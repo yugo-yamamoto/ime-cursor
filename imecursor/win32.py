@@ -105,6 +105,10 @@ MOD_NOREPEAT = 0x4000  # 押しっぱなしで連射させない
 VK_RETURN = 0x0D
 VK_ESCAPE = 0x1B
 VK_SPACE = 0x20
+VK_PRIOR = 0x21    # PageUp
+VK_NEXT = 0x22     # PageDown
+VK_LEFT = 0x25
+VK_UP = 0x26
 VK_RIGHT = 0x27
 VK_DOWN = 0x28
 

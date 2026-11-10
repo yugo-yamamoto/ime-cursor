@@ -34,7 +34,7 @@ USAGE = """ime_cursor - IME 状態バッジ + マウスカーソルの色・サ�
 常駐中のショートカット:
     Ctrl+Shift+L                  プレゼン用マーカーの開始 / 終了
                                   （モード中はドラッグで赤い枠、
-                                  Esc・→・↓・Enter で消して終了）
+                                  Esc・矢印・PageUp・PageDown・Enter で消して終了）
 """
 
 
